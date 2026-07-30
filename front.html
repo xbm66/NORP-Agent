@@ -1,0 +1,3176 @@
+<!DOCTYPE html>
+<!-- Copyright (c) 2026 xingluosama -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NORP Vibe Coding Agent</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #f5f5f5;
+    color: #333;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#header {
+    padding: 8px 16px;
+    background: #fff;
+    border-bottom: 1px solid #ddd;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+    height: 40px;
+}
+#header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #007aff;
+    letter-spacing: 0.5px;
+}
+#header .btn-group { display: flex; gap: 6px; }
+#header button {
+    background: transparent;
+    border: 1px solid #ccc;
+    color: #333;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.15s;
+}
+#header button:hover { background: #e8e8e8; }
+
+.panels {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+.chat-panel, .cmd-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.chat-panel { border-right: 1px solid #ddd; }
+
+.panel-title {
+    padding: 6px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    background: #f0f0f0;
+    border-bottom: 1px solid #ddd;
+    flex-shrink: 0;
+}
+.chat-panel .panel-title { color: #007aff; }
+.cmd-panel .panel-title { color: #e08f3a; }
+
+.chat-panel .panel-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+    line-height: 1.6;
+    word-break: break-word;
+    background: #fafafa;
+    user-select: text;
+}
+
+.user-msg {
+    margin-bottom: 10px;
+    text-align: right;
+}
+.user-text {
+    display: inline-block;
+    background: #007aff;
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 14px;
+    text-align: left;
+    max-width: 85%;
+    word-wrap: break-word;
+    user-select: text;
+    font-size: 13px;
+    white-space: pre-wrap;
+}
+
+.assistant-msg {
+    margin-bottom: 10px;
+    text-align: left;
+}
+.assistant-text {
+    display: block;
+    width: fit-content;
+    background: #fff;
+    color: #000;
+    padding: 28px 12px 6px 12px;
+    border-radius: 14px;
+    border: 1px solid #ddd;
+    text-align: left;
+    max-width: 85%;
+    word-wrap: break-word;
+    margin-left: -10px;
+    user-select: text;
+    position: relative;
+    font-size: 13px;
+    white-space: pre-wrap;
+}
+.assistant-text ul,
+.assistant-text ol {
+    padding-left: 20px;
+    margin: 4px 0;
+    list-style-position: inside;
+}
+.assistant-text li {
+    margin: 2px 0;
+}
+
+.copy-reply-btn {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    padding: 2px 10px;
+    font-size: 11px;
+    background: #e0e0e0;
+    color: #333;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: -apple-system, sans-serif;
+    display: none;
+}
+.copy-reply-btn:hover { background: #d0d0d0; }
+
+.question-bubble {
+    background: #f0f6ff;
+    border-left: 4px solid #007aff;
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    max-width: 85%;
+    white-space: pre-wrap;
+}
+.question-bubble h2 {
+    color: #007aff;
+    font-size: 15px;
+    margin: 0 0 6px 0;
+    font-weight: 700;
+    user-select: text;
+}
+.question-bubble p { color: #333; font-size: 13px; margin: 0; user-select: text; }
+
+.error-text {
+    display: inline-block;
+    background: #fff0f0;
+    color: #dc3545;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    max-width: 85%;
+    user-select: text;
+    white-space: pre-wrap;
+}
+
+.file-card {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin: 3px 0;
+    display: inline-block;
+    text-align: left;
+    min-width: 140px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.file-name { font-weight: 500; color: #333; font-size: 13px; }
+.file-meta { font-size: 11px; color: #888; margin-top: 2px; }
+.file-icon { margin-right: 4px; }
+.file-list { display: flex; flex-wrap: wrap; gap: 4px; margin: 3px 0; }
+
+.reasoning-box {
+    background: #f5f5f5;
+    border-left: 3px solid #aaa;
+    padding: 6px 10px;
+    margin-bottom: 4px;
+    font-size: 0.9em;
+    color: #555;
+    white-space: pre-wrap;
+    border-radius: 0 4px 4px 0;
+    user-select: text;
+}
+.reasoning-details {
+    margin-bottom: 4px;
+    background: #f5f5f5;
+    border-radius: 4px;
+    padding: 2px 8px;
+}
+.reasoning-details summary {
+    cursor: pointer;
+    font-size: 0.9em;
+    color: #555;
+    padding: 4px 0;
+    user-select: none;
+}
+.reasoning-details summary:hover { color: #333; }
+
+.code-block-wrapper {
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin: 4px 0;
+    position: relative;
+}
+.code-header {
+    background: #e8e8e8;
+    padding: 0 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-radius: 4px 4px 0 0;
+    height: 26px;
+    line-height: 26px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    border-bottom: 1px solid #ddd;
+}
+.code-language {
+    font-weight: 600;
+    font-size: 11px;
+    color: #555;
+    line-height: 26px;
+}
+.code-header div {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    height: 26px;
+}
+.code-header button {
+    padding: 1px 8px;
+    font-size: 10px;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    height: 20px;
+    line-height: 20px;
+    margin: 0 2px;
+}
+.code-header .copy-btn {
+    background: #ddd;
+    color: #333;
+}
+.code-header .copy-btn:hover { background: #ccc; }
+.code-block-wrapper pre {
+    margin: 0;
+    padding: 4px 8px;
+    overflow-x: auto;
+    background: #fafafa;
+    border-radius: 0 0 4px 4px;
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.code-block-wrapper code {
+    font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    display: block;
+}
+
+.markdown-table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 8px 0;
+    font-size: 13px;
+}
+.markdown-table th, .markdown-table td {
+    border: 1px solid #ccc;
+    padding: 6px 10px;
+    text-align: left;
+}
+.markdown-table th { background: #f2f2f2; font-weight: 600; }
+.markdown-table tr:nth-child(even) { background: #fafafa; }
+
+.math-inline-wrapper {
+    position: relative;
+    display: inline-block;
+}
+.math-display-wrapper {
+    position: relative;
+    display: block;
+    text-align: center;
+    margin: 8px 0;
+}
+.math-copy-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    background: #e0e0e0;
+    color: #333;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+.math-display-wrapper:hover .math-copy-btn,
+.math-inline-wrapper:hover .math-copy-btn {
+    opacity: 1;
+}
+.math-display-wrapper .math-copy-btn {
+    top: -15px;
+    right: -10px;
+}
+.math-inline-wrapper .math-copy-btn {
+    top: -12px;
+    right: -18px;
+}
+
+.cmd-panel .panel-content {
+    flex: 1;
+    overflow-y: auto;
+    background: #fafafa;
+    user-select: text;
+    padding: 14px;
+    font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.4);
+}
+.modal-content {
+    background: #fff;
+    margin: 3% auto;
+    padding: 20px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 440px;
+    max-height: 85vh;
+    overflow-y: auto;
+    color: #333;
+}
+.modal-content h2 { margin-bottom: 12px; font-size: 16px; }
+.modal-content h3 { margin-bottom: 8px; font-size: 13px; color: #555; }
+.modal-content label { display: block; margin: 8px 0 3px; font-size: 12px; color: #666; }
+.modal-content select, .modal-content input[type="text"], .modal-content input[type="number"], .modal-content input[type="password"] {
+    width: 100%;
+    padding: 6px 10px;
+    margin-bottom: 6px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    color: #333;
+    font-size: 13px;
+    outline: none;
+}
+.modal-content input[type="checkbox"] { margin-right: 6px; }
+.modal-content input[type="range"] { width: 100%; }
+.modal-content .btn-row { display: flex; gap: 8px; margin-top: 14px; justify-content: flex-end; }
+.modal-content .btn-row.btn-row-between { justify-content: space-between; }
+.modal-content .btn-row button {
+    padding: 6px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+}
+.btn-primary { background: #007aff; color: #fff; }
+.btn-primary:hover { background: #0056b3; }
+.btn-secondary { background: #e0e0e0; color: #333; }
+.btn-secondary:hover { background: #ccc; }
+.btn-danger { background: #dc3545; color: #fff; }
+.btn-danger:hover { background: #a71d2a; }
+.btn-small {
+    padding: 4px 10px;
+    font-size: 12px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #f0f0f0;
+    cursor: pointer;
+    margin-left: 6px;
+    white-space: nowrap;
+}
+.btn-small:hover { background: #e0e0e0; }
+.flex-row { display: flex; align-items: center; }
+.checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 10px 0 6px;
+    padding: 8px 10px;
+    background: #f8f8f8;
+    border-radius: 4px;
+}
+.checkbox-row input[type="checkbox"] { width: auto; margin: 0; }
+.checkbox-row label { margin: 0; font-size: 13px; color: #333; cursor: pointer; }
+.checkbox-desc { font-size: 11px; color: #888; margin-left: 22px; margin-bottom: 6px; }
+.disabled-text { color: #999; font-size: 0.8em; margin-left: 4px; }
+
+#ask-user-modal .modal-content {
+    max-width: 520px;
+    max-height: 80vh;
+}
+#ask-user-question {
+    background: #f0f6ff;
+    border-left: 4px solid #007aff;
+    border-radius: 4px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+    max-height: 35vh;
+    overflow-y: auto;
+    font-size: 13px;
+    line-height: 1.6;
+    user-select: text;
+    white-space: pre-wrap;
+}
+#ask-user-question h2 { color: #007aff; font-size: 15px; margin: 0 0 6px 0; font-weight: 700; }
+#ask-user-question h3, #ask-user-question h4 { color: #333; margin: 8px 0 4px; }
+#ask-user-question p { margin: 4px 0; }
+#ask-user-question ul, #ask-user-question ol { padding-left: 20px; margin: 4px 0; }
+#ask-user-question li { margin: 2px 0; }
+#ask-user-question .code-block-wrapper { margin: 6px 0; }
+#ask-user-question .code-block-wrapper pre { max-height: 200px; overflow-y: auto; }
+#ask-user-reply-input {
+    width: 100%;
+    min-height: 60px;
+    max-height: 150px;
+    padding: 10px 12px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    background: #fff;
+    color: #333;
+    font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+    font-size: 13px;
+    outline: none;
+    resize: vertical;
+    line-height: 1.5;
+    transition: border-color 0.2s;
+}
+#ask-user-reply-input:focus { border-color: #007aff; }
+#ask-user-reply-hint {
+    font-size: 11px;
+    color: #888;
+    margin-top: 4px;
+}
+
+#confirm-write-modal .modal-content {
+    max-width: 460px;
+    text-align: center;
+}
+#confirm-write-message {
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+    margin: 10px 0 8px;
+    word-break: break-all;
+}
+#confirm-write-icon {
+    font-size: 32px;
+    margin-bottom: 4px;
+}
+#confirm-write-detail {
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 14px;
+}
+
+.input-area {
+    border-top: 1px solid #ddd;
+    padding: 10px 14px;
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    background: #fff;
+    flex-shrink: 0;
+}
+.input-area textarea {
+    flex: 1;
+    resize: none;
+    min-height: 52px;
+    max-height: 200px;
+    padding: 10px 12px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    background: #fff;
+    color: #333;
+    font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+    line-height: 1.5;
+}
+.input-area textarea:focus { border-color: #007aff; }
+.input-area button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 13px;
+    white-space: nowrap;
+    transition: all 0.15s;
+    align-self: flex-end;
+    margin-bottom: 0;
+}
+.btn-send { background: #007aff; color: #fff; }
+.btn-send:hover { background: #0056b3; }
+.btn-stop { background: #dc3545; color: #fff; display: none; }
+.btn-stop:hover { background: #a71d2a; }
+
+#file-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    max-width: 200px;
+    overflow: hidden;
+}
+.file-badge {
+    background: #e8e8e8;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    color: #333;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    white-space: nowrap;
+    font-family: -apple-system, sans-serif;
+}
+.file-badge .remove {
+    cursor: pointer;
+    color: #999;
+    font-weight: bold;
+    margin-left: 2px;
+    font-size: 13px;
+}
+.file-badge .remove:hover { color: #dc3545; }
+
+#status-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 14px;
+    background: #f5f5f5;
+    border-top: 1px solid #ddd;
+    font-size: 11px;
+    color: #888;
+    flex-shrink: 0;
+    height: 26px;
+    gap: 12px;
+}
+#status-bar .status-left { display: flex; gap: 16px; align-items: center; }
+#status-bar .token-info { color: #555; }
+#status-bar .token-info span { font-weight: 600; }
+#status-bar .token-info .tok-in { color: #007aff; }
+#status-bar .token-info .tok-out { color: #34c759; }
+#status-bar .token-info .tok-tool { color: #e08f3a; }
+#status-bar .token-info .tok-total { color: #333; }
+
+#toast-container {
+    position: fixed;
+    bottom: 90px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+.toast {
+    background: #333;
+    color: #fff;
+    padding: 6px 16px;
+    border-radius: 16px;
+    font-size: 12px;
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+.toast.show { opacity: 1; }
+
+@media (max-width: 700px) {
+    .panels { flex-direction: column; }
+    .chat-panel { border-right: none; border-bottom: 1px solid #ddd; }
+    .user-text, .assistant-text { max-width: 90%; }
+}
+
+#wizard-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 10000;
+    background: #0a0e17;
+    pointer-events: all;
+}
+#wizard-overlay.show {
+    display: block;
+}
+
+#wiz-center-wrapper {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 2;
+    width: 100%;
+    max-width: 500px;
+    padding: 0 16px;
+}
+
+#wiz-particles {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 0;
+    pointer-events: none;
+}
+
+#wiz-skip-btn {
+    position: fixed;
+    top: 20px; right: 24px;
+    z-index: 10010;
+    padding: 8px 18px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.18);
+    color: rgba(255,255,255,0.7);
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    letter-spacing: 0.5px;
+    transition: all 0.3s ease;
+}
+#wiz-skip-btn:hover {
+    background: rgba(255,255,255,0.12);
+    color: #fff;
+    border-color: rgba(255,255,255,0.35);
+}
+
+#wiz-step-indicator {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+    z-index: 2;
+}
+.wiz-step-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.2);
+    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.wiz-step-dot.active {
+    background: #007aff;
+    box-shadow: 0 0 14px rgba(0,122,255,0.6);
+    transform: scale(1.4);
+}
+.wiz-step-dot.done {
+    background: #34c759;
+    box-shadow: 0 0 8px rgba(52,199,89,0.4);
+}
+.wiz-step-line {
+    width: 32px; height: 2px;
+    align-self: center;
+    background: rgba(255,255,255,0.12);
+    border-radius: 1px;
+    transition: all 0.5s ease;
+}
+.wiz-step-line.done {
+    background: #34c759;
+}
+
+#wiz-card-container {
+    width: 440px;
+    max-width: 92vw;
+    min-height: 360px;
+    position: relative;
+    perspective: 1200px;
+}
+.wiz-card {
+    background: rgba(20,24,34,0.92);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 36px 32px 28px;
+    width: 100%;
+    position: absolute;
+    top: 0; left: 0;
+    opacity: 0;
+    transform: translateY(30px) scale(0.97);
+    transition: all 0.55s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+}
+.wiz-card.active {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: all;
+}
+.wiz-card.leaving {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.98);
+}
+
+.wiz-card .wiz-icon {
+    font-size: 42px;
+    margin-bottom: 12px;
+    display: block;
+    animation: wizIconPulse 3s ease-in-out infinite;
+}
+@keyframes wizIconPulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.08); opacity: 0.85; }
+}
+.wiz-card h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 8px;
+    letter-spacing: 0.3px;
+}
+.wiz-card p.wiz-subtitle {
+    font-size: 13px;
+    color: #8a8a8a;
+    line-height: 1.6;
+    margin-bottom: 20px;
+}
+.wiz-card label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #aaa;
+    margin: 14px 0 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+.wiz-card label .wiz-required {
+    color: #ff4757;
+}
+.wiz-card input[type="password"],
+.wiz-card input[type="text"] {
+    width: 100%;
+    padding: 11px 14px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    color: #fff;
+    font-size: 13px;
+    font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+    outline: none;
+    transition: all 0.25s ease;
+    letter-spacing: 0.3px;
+}
+.wiz-card input:focus {
+    border-color: #007aff;
+    background: rgba(0,122,255,0.06);
+    box-shadow: 0 0 0 3px rgba(0,122,255,0.12);
+}
+.wiz-card select {
+    width: 100%;
+    padding: 11px 14px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    color: #fff;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+    transition: all 0.25s ease;
+}
+.wiz-card select:focus {
+    border-color: #007aff;
+}
+.wiz-card select option {
+    background: #1a1e2a;
+    color: #fff;
+}
+.wiz-card .wiz-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.wiz-card .wiz-row input { flex: 1; }
+.wiz-card .wiz-btn-small {
+    padding: 8px 14px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    color: #ccc;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    white-space: nowrap;
+    transition: all 0.25s ease;
+}
+.wiz-card .wiz-btn-small:hover {
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+}
+.wiz-card .wiz-status {
+    font-size: 11px;
+    margin-top: 6px;
+    min-height: 18px;
+    transition: color 0.3s;
+}
+.wiz-card .wiz-status.ok { color: #34c759; }
+.wiz-card .wiz-status.err { color: #ff4757; }
+.wiz-card .wiz-status.info { color: #888; }
+
+.wiz-card .wiz-btn-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 22px;
+    justify-content: flex-end;
+    align-items: center;
+}
+.wiz-btn-back {
+    padding: 10px 20px;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.15);
+    color: #aaa;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    font-weight: 600;
+    transition: all 0.25s ease;
+}
+.wiz-btn-back:hover {
+    background: rgba(255,255,255,0.06);
+    color: #fff;
+}
+.wiz-btn-next {
+    padding: 10px 24px;
+    background: linear-gradient(135deg, #007aff, #0056d6);
+    border: none;
+    color: #fff;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    transition: all 0.25s ease;
+    box-shadow: 0 4px 16px rgba(0,122,255,0.3);
+}
+.wiz-btn-next:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 24px rgba(0,122,255,0.45);
+}
+.wiz-btn-next:active {
+    transform: translateY(0);
+}
+.wiz-btn-finish {
+    padding: 10px 28px;
+    background: linear-gradient(135deg, #34c759, #28a745);
+    border: none;
+    color: #fff;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    transition: all 0.25s ease;
+    box-shadow: 0 4px 16px rgba(52,199,89,0.3);
+}
+.wiz-btn-finish:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 24px rgba(52,199,89,0.45);
+}
+
+.wiz-summary-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-size: 13px;
+}
+.wiz-summary-item .wiz-sum-key {
+    color: #888;
+    font-size: 12px;
+}
+.wiz-summary-item .wiz-sum-val {
+    color: #ddd;
+    font-weight: 500;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+    font-size: 11px;
+}
+
+#wizard-overlay.fade-out {
+    animation: wizFadeOut 0.6s ease forwards;
+    pointer-events: none;
+}
+@keyframes wizFadeOut {
+    to { opacity: 0; transform: scale(1.03); }
+}
+
+#wiz-skip-dialog {
+    display: none;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 10020;
+    background: rgba(0,0,0,0.6);
+    justify-content: center;
+    align-items: center;
+}
+#wiz-skip-dialog.show {
+    display: flex;
+}
+#wiz-skip-dialog .wiz-dlg {
+    background: rgba(28,32,44,0.98);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 14px;
+    padding: 28px 30px;
+    text-align: center;
+    max-width: 380px;
+    width: 90%;
+    animation: wizDlgIn 0.3s ease;
+}
+@keyframes wizDlgIn {
+    from { opacity: 0; transform: scale(0.9) translateY(10px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+#wiz-skip-dialog .wiz-dlg h3 {
+    color: #fff;
+    font-size: 16px;
+    margin-bottom: 8px;
+}
+#wiz-skip-dialog .wiz-dlg p {
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 20px;
+    line-height: 1.5;
+}
+#wiz-skip-dialog .wiz-dlg .wiz-dlg-btn-row {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.wiz-card .wiz-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0 4px;
+}
+.wiz-card .wiz-checkbox-row input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    accent-color: #007aff;
+    cursor: pointer;
+}
+.wiz-card .wiz-checkbox-row label {
+    margin: 0;
+    font-size: 13px;
+    color: #ccc;
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+}
+.wiz-card .wiz-checkbox-desc {
+    font-size: 11px;
+    color: #777;
+    margin-left: 22px;
+    margin-bottom: 8px;
+    line-height: 1.4;
+}
+
+.wiz-card input[type="number"] {
+    width: 100%;
+    padding: 11px 14px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    color: #fff;
+    font-size: 13px;
+    font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+    outline: none;
+    transition: all 0.25s ease;
+}
+.wiz-card input[type="number"]:focus {
+    border-color: #007aff;
+    background: rgba(0,122,255,0.06);
+    box-shadow: 0 0 0 3px rgba(0,122,255,0.12);
+}
+
+@media (max-width: 500px) {
+    #wiz-card-container { width: 96vw; }
+    .wiz-card { padding: 28px 20px 22px; }
+    .wiz-card h2 { font-size: 19px; }
+}
+</style>
+</head>
+<body>
+
+<div id="wizard-overlay">
+    <canvas id="wiz-particles"></canvas>
+
+    <div id="wiz-skip-btn" title="Skip onboarding">Skip ▶</div>
+
+    <div id="wiz-skip-dialog">
+        <div class="wiz-dlg">
+            <h3>Skip Setup?</h3>
+            <p>You can configure your API key and settings later from the Settings panel.</p>
+            <div class="wiz-dlg-btn-row">
+                <button class="wiz-btn-back" id="wiz-skip-cancel">Cancel</button>
+                <button class="wiz-btn-next" id="wiz-skip-confirm">Skip</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="wiz-center-wrapper">
+        <div id="wiz-step-indicator">
+            <span class="wiz-step-dot active" data-step="0"></span>
+            <span class="wiz-step-line" data-line="0"></span>
+            <span class="wiz-step-dot" data-step="1"></span>
+            <span class="wiz-step-line" data-line="1"></span>
+            <span class="wiz-step-dot" data-step="2"></span>
+            <span class="wiz-step-line" data-line="2"></span>
+            <span class="wiz-step-dot" data-step="3"></span>
+        </div>
+
+        <div id="wiz-card-container">
+
+            <div class="wiz-card active" data-card="0">
+                <span class="wiz-icon">⚡</span>
+                <h2>Welcome to NORP Vibe Coding Agent</h2>
+                <p class="wiz-subtitle">Your autonomous AI coding companion.<br>Let's get you set up in just a few steps.</p>
+                <div class="wiz-btn-row">
+                    <span></span>
+                    <button class="wiz-btn-next" id="wiz-step0-next">Get Started →</button>
+                </div>
+            </div>
+
+            <div class="wiz-card" data-card="1" style="overflow-y:auto;max-height:80vh;">
+                <span class="wiz-icon">🔑</span>
+                <h2>API Configuration</h2>
+                <p class="wiz-subtitle">Enter your API key and base URL to connect to the AI service.</p>
+
+                <label>API Base URL</label>
+                <input type="text" id="wiz-api-base" value="https://api.deepseek.com" placeholder="https://api.deepseek.com">
+
+                <label>API Key <span class="wiz-required">*</span></label>
+                <div class="wiz-row">
+                    <input type="password" id="wiz-apikey" placeholder="sk-..." autocomplete="off">
+                    <button class="wiz-btn-small" id="wiz-getkey" title="Get a key from DeepSeek">Get Key</button>
+                </div>
+                <div class="wiz-row" style="margin-top:8px;">
+                    <button class="wiz-btn-small" id="wiz-verify-key" style="flex:1;text-align:center;">🔍 Verify Key</button>
+                </div>
+                <div class="wiz-status info" id="wiz-key-status"></div>
+
+                <div class="wiz-btn-row">
+                    <button class="wiz-btn-back" id="wiz-step1-back">← Back</button>
+                    <button class="wiz-btn-next" id="wiz-step1-next">Continue →</button>
+                </div>
+            </div>
+
+            <div class="wiz-card" data-card="2" style="overflow-y:auto;max-height:70vh;">
+                <span class="wiz-icon">⚙️</span>
+                <h2>Basic Configuration</h2>
+                <p class="wiz-subtitle">Choose your preferred model, workspace, and agent behavior settings.</p>
+
+                <label>Model</label>
+                <select id="wiz-model">
+                    <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+                    <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+                </select>
+
+                <label>Project Root</label>
+                <div class="wiz-row">
+                    <input type="text" id="wiz-project-root" placeholder="Select workspace directory...">
+                    <button class="wiz-btn-small" id="wiz-browse">Browse</button>
+                </div>
+
+                <div class="wiz-checkbox-row" style="margin-top:14px;">
+                    <input type="checkbox" id="wiz-web-search">
+                    <label for="wiz-web-search">Enable Web Search</label>
+                </div>
+                <div class="wiz-checkbox-desc">Allow the Agent to search the web for real-time information.</div>
+
+                <div class="wiz-checkbox-row">
+                    <input type="checkbox" id="wiz-confirm-write" checked>
+                    <label for="wiz-confirm-write">Confirm Before Write/Delete</label>
+                </div>
+                <div class="wiz-checkbox-desc">Prompt a confirmation dialog before writing or deleting files.</div>
+
+                <label>Event Queue Limit</label>
+                <input type="number" id="wiz-queue-size" min="1" max="1024" value="200">
+
+                <label>Max Steps</label>
+                <input type="number" id="wiz-max-steps" min="1" max="512" value="128">
+
+                <label>Task Timeout (seconds, 0 = disable)</label>
+                <input type="number" id="wiz-task-timeout" min="0" max="3600" step="30" value="0">
+
+                <div class="wiz-btn-row">
+                    <button class="wiz-btn-back" id="wiz-step2-back">← Back</button>
+                    <button class="wiz-btn-next" id="wiz-step2-next">Continue →</button>
+                </div>
+            </div>
+
+            <div class="wiz-card" data-card="3" style="overflow-y:auto;max-height:70vh;">
+                <span class="wiz-icon">🚀</span>
+                <h2>Ready to Go</h2>
+                <p class="wiz-subtitle">Review your settings below, then start using the agent.</p>
+
+                <div class="wiz-summary-item"><span class="wiz-sum-key">API Base URL</span><span class="wiz-sum-val" id="wiz-sum-base">-</span></div>
+                <div class="wiz-summary-item"><span class="wiz-sum-key">API Key</span><span class="wiz-sum-val" id="wiz-sum-key">********</span></div>
+                <div class="wiz-summary-item"><span class="wiz-sum-key">Model</span><span class="wiz-sum-val" id="wiz-sum-model">-</span></div>
+                <div class="wiz-summary-item"><span class="wiz-sum-key">Project Root</span><span class="wiz-sum-val" id="wiz-sum-root">-</span></div>
+                <div class="wiz-summary-item"><span class="wiz-sum-key">Web Search</span><span class="wiz-sum-val" id="wiz-sum-web-search">Off</span></div>
+                <div class="wiz-summary-item"><span class="wiz-sum-key">Confirm Write/Delete</span><span class="wiz-sum-val" id="wiz-sum-confirm-write">On</span></div>
+                <div class="wiz-summary-item"><span class="wiz-sum-key">Queue Limit</span><span class="wiz-sum-val" id="wiz-sum-queue-size">200</span></div>
+                <div class="wiz-summary-item"><span class="wiz-sum-key">Max Steps</span><span class="wiz-sum-val" id="wiz-sum-max-steps">128</span></div>
+                <div class="wiz-summary-item"><span class="wiz-sum-key">Task Timeout</span><span class="wiz-sum-val" id="wiz-sum-task-timeout">0s (disabled)</span></div>
+
+                <div class="wiz-btn-row">
+                    <button class="wiz-btn-back" id="wiz-step3-back">← Back</button>
+                    <button class="wiz-btn-finish" id="wiz-finish-btn">Start Using ✨</button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<div id="header">
+    <h1>NORP Vibe Coding Agent</h1>
+    <div class="btn-group">
+        <button id="about-btn">About</button>
+        <button id="balance-btn">Balance</button>
+        <button id="key-btn">Key</button>
+        <button id="settings-btn">Settings</button>
+        <button id="stop-btn" class="btn-stop">Stop</button>
+    </div>
+</div>
+
+<div class="panels">
+    <div class="chat-panel">
+        <div class="panel-title">Chat</div>
+        <div class="panel-content" id="chat-content"></div>
+    </div>
+    <div class="cmd-panel">
+        <div class="panel-title">Commands</div>
+        <div class="panel-content" id="cmd-content"></div>
+    </div>
+</div>
+
+<div class="input-area">
+    <textarea id="user-input" placeholder="Enter to send, Ctrl+Enter for newline. Drag & drop files here..." rows="1"></textarea>
+    <div id="file-badges"></div>
+    <button class="btn-send" id="send-btn">Send</button>
+</div>
+
+<div id="status-bar">
+    <div class="status-left">
+        <span id="status-text">Ready</span>
+    </div>
+    <div class="token-info" id="token-display"></div>
+</div>
+
+<div id="toast-container"></div>
+
+<div id="ask-user-modal" class="modal">
+    <div class="modal-content">
+        <h2>🤖 Agent Question</h2>
+        <div id="ask-user-question"></div>
+        <label for="ask-user-reply-input">Your Reply</label>
+        <textarea id="ask-user-reply-input" placeholder="Type your reply... (Enter to send, Ctrl+Enter for newline)"></textarea>
+        <p id="ask-user-reply-hint">Enter ↵ to reply &nbsp;|&nbsp; Ctrl+Enter for newline &nbsp;|&nbsp; Esc to cancel task</p>
+        <div class="btn-row btn-row-between">
+            <button class="btn-danger" id="ask-user-cancel-btn">Cancel Task</button>
+            <button class="btn-primary" id="ask-user-reply-btn">Reply</button>
+        </div>
+    </div>
+</div>
+
+<div id="confirm-write-modal" class="modal">
+    <div class="modal-content">
+        <div id="confirm-write-icon">⚠️</div>
+        <h2 id="confirm-write-title">Confirm Operation</h2>
+        <p id="confirm-write-message"></p>
+        <p id="confirm-write-detail"></p>
+        <div class="btn-row" style="justify-content:center;gap:16px;">
+            <button class="btn-danger" id="confirm-write-cancel-btn">Cancel</button>
+            <button class="btn-primary" id="confirm-write-confirm-btn">Confirm</button>
+        </div>
+    </div>
+</div>
+
+<div id="settings-modal" class="modal">
+    <div class="modal-content">
+        <h2>Settings</h2>
+
+        <label>Model</label>
+        <select id="cfg-model"></select>
+
+        <label>API Base URL</label>
+        <div class="flex-row">
+            <input type="text" id="cfg-api-base" placeholder="https://api.deepseek.com" style="flex:1;">
+            <button class="btn-small" id="cfg-refresh-models">Refresh</button>
+        </div>
+        <span id="cfg-models-status" style="font-size:11px; color:#888;"></span>
+
+        <h3 style="margin-top:12px;">🧠 Reasoning & Temperature</h3>
+        <label>Reasoning Effort</label>
+        <select id="cfg-think-level">
+            <option value="关">Off</option>
+            <option value="低">Low</option>
+            <option value="中">Medium</option>
+            <option value="高">Max (Deep Reasoning)</option>
+        </select>
+        <span id="cfg-think-hint" style="font-size:10px;color:#888;">Temperature and logprobs are disabled when reasoning is on.</span>
+
+        <label>Temperature</label>
+        <input type="range" id="cfg-temperature" min="0" max="20" step="1" value="10">
+        <span id="cfg-temperature-value">1.0</span>
+
+        <label>Max Output Tokens</label>
+        <input type="number" id="cfg-max-tokens" min="1" max="65536" step="1" value="32767">
+
+        <h3 style="margin-top:12px;">📁 Project</h3>
+        <label>Project Root</label>
+        <div class="flex-row">
+            <input type="text" id="cfg-project-root" placeholder="~/vibe_workspace" style="flex:1;">
+            <button class="btn-small" id="browse-project-root">Browse</button>
+        </div>
+        <div class="checkbox-row">
+            <input type="checkbox" id="cfg-web-search">
+            <label for="cfg-web-search">Enable Web Search</label>
+        </div>
+        <div class="checkbox-desc">Enable web search for real-time information. Agent can call web_search tool.</div>
+
+        <div class="checkbox-row">
+            <input type="checkbox" id="cfg-confirm-write-delete">
+            <label for="cfg-confirm-write-delete">Confirm Before Write/Delete</label>
+        </div>
+        <div class="checkbox-desc">When enabled, a confirmation dialog will appear before writing or deleting files.</div>
+
+        <label>Event Queue Limit</label>
+        <input type="number" id="cfg-queue-size" min="1" max="1024" value="200">
+        <span id="queue-warning" style="display:none; color:#b8860b; font-size:11px;">Queue size over 300 may cause UI lag.</span>
+
+        <label>Max Steps</label>
+        <input type="number" id="cfg-max-steps" min="1" max="512" value="128">
+
+        <label>Task Timeout (seconds, 0 = disable)</label>
+        <input type="number" id="cfg-task-timeout" min="0" max="3600" step="30" value="0">
+        <span style="font-size:10px;color:#888;">Timeout pauses while waiting for user input (ask/confirm dialogs).</span>
+
+        <h3 style="margin-top:12px;">💾 Memory (Conversation History)</h3>
+        <div class="checkbox-row">
+            <input type="checkbox" id="cfg-memory">
+            <label for="cfg-memory">Enable Memory Persistence</label>
+        </div>
+        <div class="checkbox-desc">Save conversation history between sessions for context continuity.</div>
+
+        <label>Memory Mode</label>
+        <select id="cfg-memory-mode">
+            <option value="full">Full (keep all rounds up to limit)</option>
+            <option value="summary">Summary (compress old rounds)</option>
+        </select>
+
+        <label>Max Rounds</label>
+        <input type="number" id="cfg-max-rounds" min="1" max="50" value="10">
+
+        <button class="btn-danger" id="clear-memory-btn" style="margin-top:6px;">Clear Memory</button>
+        <span id="memory-status" style="font-size:11px;color:#888;margin-left:8px;"></span>
+
+        <div class="btn-row btn-row-between">
+            <button class="btn-danger" id="settings-restore-defaults">Restore Defaults</button>
+            <div>
+                <button class="btn-secondary" id="settings-cancel">Cancel</button>
+                <button class="btn-primary" id="settings-save-btn">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="apikey-modal" class="modal">
+    <div class="modal-content">
+        <h2>Change API Key</h2>
+        <input type="password" id="apikey-input" placeholder="Enter API Key" style="margin:12px 0;">
+        <div class="btn-row" style="justify-content:space-between;">
+            <button class="btn-secondary" id="apikey-get-btn">Get Key</button>
+            <div>
+                <button class="btn-secondary" id="apikey-cancel-btn">Cancel</button>
+                <button class="btn-primary" id="apikey-confirm-btn" style="margin-left:6px;">Confirm</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="about-modal" class="modal">
+    <div class="modal-content">
+        <h2>About</h2>
+        <p><strong>Author:</strong> xingluosama</p>
+        <p><strong>Studio:</strong> NORP Studio</p>
+        <p><strong>Version:</strong> Beta 1.0.0</p>
+        <p style="margin-top:12px; color:#888; font-size:12px;">Built based on the OpenAI SDK specification.</p>
+        <div class="btn-row">
+            <button class="btn-primary" id="about-close-btn">OK</button>
+        </div>
+    </div>
+</div>
+
+<div id="firstrun-modal" class="modal">
+    <div class="modal-content" style="max-width:480px;">
+        <h2>🚀 Welcome to NORP Vibe Coding Agent</h2>
+        <p style="font-size:13px;color:#666;margin-bottom:12px;">It looks like this is your first time running the agent. Please complete the basic setup below.</p>
+
+        <label>API Key <span style="color:#dc3545;">*</span></label>
+        <div class="flex-row">
+            <input type="password" id="firstrun-apikey" placeholder="sk-..." style="flex:1;">
+            <button class="btn-small" id="firstrun-getkey">Get Key</button>
+        </div>
+        <span id="firstrun-key-status" style="font-size:11px;color:#888;"></span>
+
+        <label>API Base URL</label>
+        <input type="text" id="firstrun-api-base" placeholder="https://api.deepseek.com" value="https://api.deepseek.com">
+
+        <label>Model</label>
+        <select id="firstrun-model">
+            <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+            <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+            <option value="deepseek-chat">deepseek-chat</option>
+            <option value="deepseek-reasoner">deepseek-reasoner</option>
+        </select>
+
+        <label>Project Root</label>
+        <div class="flex-row">
+            <input type="text" id="firstrun-project-root" placeholder="Select project directory..." style="flex:1;">
+            <button class="btn-small" id="firstrun-browse">Browse</button>
+        </div>
+
+        <p style="font-size:11px;color:#888;margin-top:10px;">You can change all settings later in the Settings panel.</p>
+        <div class="btn-row">
+            <button class="btn-primary" id="firstrun-done-btn">Start Using</button>
+        </div>
+    </div>
+</div>
+
+<script>
+var isWaiting = false;
+var isStreaming = false;
+var pollingTimer = null;
+var config = {};
+var currentThinkingEl = null;
+var currentReplyEl = null;
+var currentCmdEl = null;
+var totalTokens = { input: 0, output: 0, tool: 0 };
+
+var selectedFiles = [];
+
+var chatContent = document.getElementById('chat-content');
+var cmdContent = document.getElementById('cmd-content');
+var userInput = document.getElementById('user-input');
+var sendBtn = document.getElementById('send-btn');
+var stopBtn = document.getElementById('stop-btn');
+var fileBadges = document.getElementById('file-badges');
+var statusText = document.getElementById('status-text');
+var tokenDisplay = document.getElementById('token-display');
+var settingsModal = document.getElementById('settings-modal');
+var apikeyModal = document.getElementById('apikey-modal');
+var aboutModal = document.getElementById('about-modal');
+var firstrunModal = document.getElementById('firstrun-modal');
+var askUserModal = document.getElementById('ask-user-modal');
+var askUserQuestion = document.getElementById('ask-user-question');
+var askUserReplyInput = document.getElementById('ask-user-reply-input');
+var askUserReplyBtn = document.getElementById('ask-user-reply-btn');
+var askUserCancelBtn = document.getElementById('ask-user-cancel-btn');
+var toastContainer = document.getElementById('toast-container');
+
+var confirmWriteModal = document.getElementById('confirm-write-modal');
+var confirmWriteMessage = document.getElementById('confirm-write-message');
+var confirmWriteDetail = document.getElementById('confirm-write-detail');
+var confirmWriteConfirmBtn = document.getElementById('confirm-write-confirm-btn');
+var confirmWriteCancelBtn = document.getElementById('confirm-write-cancel-btn');
+
+function showToast(msg, duration) {
+    duration = duration || 2000;
+    var div = document.createElement('div');
+    div.className = 'toast';
+    div.textContent = msg;
+    toastContainer.appendChild(div);
+    setTimeout(function() { div.classList.add('show'); }, 10);
+    setTimeout(function() { div.classList.remove('show'); setTimeout(function() { div.remove(); }, 300); }, duration);
+}
+
+function updateTokenDisplay(usage) {
+    if (usage) {
+        if (usage.input_tokens !== undefined) totalTokens.input = usage.input_tokens;
+        if (usage.output_tokens !== undefined) totalTokens.output = usage.output_tokens;
+        if (usage.tool_call_tokens !== undefined) totalTokens.tool = usage.tool_call_tokens;
+    }
+
+    var grandTotal = totalTokens.input + totalTokens.output + totalTokens.tool;
+    if (grandTotal <= 0) return;
+
+    var parts = [];
+    if (totalTokens.input > 0)
+        parts.push('<span class="tok-in">' + totalTokens.input.toLocaleString() + '</span> in');
+    if (totalTokens.output > 0)
+        parts.push('<span class="tok-out">' + totalTokens.output.toLocaleString() + '</span> out');
+    if (totalTokens.tool > 0)
+        parts.push('<span class="tok-tool">' + totalTokens.tool.toLocaleString() + '</span> tool');
+    parts.push('= <span class="tok-total">' + grandTotal.toLocaleString() + '</span>');
+    tokenDisplay.innerHTML = 'Tokens: ' + parts.join(' + ');
+}
+
+function resetTokenDisplay() {
+    totalTokens = { input: 0, output: 0, tool: 0 };
+    tokenDisplay.innerHTML = '';
+}
+
+var SCROLL_THRESHOLD = 80;
+
+function isNearBottom(el) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_THRESHOLD;
+}
+
+function scrollChatToBottom() {
+    if (isNearBottom(chatContent)) {
+        chatContent.scrollTop = chatContent.scrollHeight;
+    }
+}
+function scrollCmdToBottom() {
+    if (isNearBottom(cmdContent)) {
+        cmdContent.scrollTop = cmdContent.scrollHeight;
+    }
+}
+
+function escapeHtml(text) {
+    var div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function safeKatex(latex, displayMode) {
+    try {
+        return katex.renderToString(latex, {
+            displayMode: displayMode,
+            throwOnError: false,
+            trust: true
+        });
+    } catch (err) {
+        var escaped = latex.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return '<code style="color:#dc3545;background:#fff5f5;padding:2px 6px;border-radius:3px;font-size:0.85em;" title="KaTeX render error: ' + err.message.replace(/"/g, '&quot;') + '">' + escaped + '</code>';
+    }
+}
+
+var TABLE_LINE_RE = /^\|.+\|.+\|/;
+var TABLE_SEP_RE  = /^\|[\s\-:]+\|[\s\-:]+\|/;
+
+function fixTableNewlines(text) {
+    var lines = text.split('\n');
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        var isTableLine = TABLE_LINE_RE.test(line);
+        var prevLine = i > 0 ? lines[i - 1] : '';
+        var isPrevTable = TABLE_LINE_RE.test(prevLine);
+        var isPrevSep = TABLE_SEP_RE.test(prevLine);
+        var isPrevBlank = prevLine.trim() === '';
+
+        if (isTableLine && !isPrevTable && !isPrevSep && !isPrevBlank && i > 0) {
+            out.push('');
+        }
+        out.push(line);
+    }
+    return out.join('\n');
+}
+
+function renderContent(text) {
+    if (!text) return '';
+    if (typeof marked === 'undefined') {
+        return escapeHtml(text);
+    }
+
+    try {
+        var processed = fixTableNewlines(text);
+        processed = processed.replace(/\u200B/g, '').replace(/\uFEFF/g, '');
+
+        var lines = processed.split('\n');
+        var newLines = [];
+        var fencedBlocks = [];
+        var inCode = false;
+        var lang = '';
+        var codeContent = [];
+
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            var startMatch = line.match(/^```(\s*)(\w*)/);
+            var endMatch = line.match(/^```\s*$/);
+
+            if (!inCode) {
+                if (startMatch) {
+                    inCode = true;
+                    lang = startMatch[2] || '';
+                    codeContent = [];
+                    var idx = fencedBlocks.length;
+                    fencedBlocks.push({ lang: lang, code: '', unclosed: false });
+                    newLines.push('\u00A7\u00A7FENCED_' + idx + '\u00A7\u00A7');
+                } else {
+                    newLines.push(line);
+                }
+            } else {
+                if (endMatch) {
+                    var code = codeContent.join('\n');
+                    var lastBlock = fencedBlocks[fencedBlocks.length - 1];
+                    lastBlock.code = code;
+                    lastBlock.unclosed = false;
+                    inCode = false;
+                    lang = '';
+                    codeContent = [];
+                } else {
+                    codeContent.push(line);
+                }
+            }
+        }
+
+        if (inCode) {
+            var code = codeContent.join('\n');
+            var lastBlock = fencedBlocks[fencedBlocks.length - 1];
+            lastBlock.code = code;
+            lastBlock.unclosed = true;
+        }
+
+        processed = newLines.join('\n');
+
+        var inlineCodes = [];
+        processed = processed.replace(/(`+)([^`]+?)\1/g, function(match, ticks, code) {
+            inlineCodes.push(code);
+            return '\u00A7\u00A7INLINE_' + (inlineCodes.length - 1) + '\u00A7\u00A7';
+        });
+
+        var displayMaths = [];
+        var inlineMaths = [];
+
+        processed = processed.replace(/\$\$([\s\S]*?)\$\$/g, function(match, math) {
+            displayMaths.push(math.trim());
+            return '\u00A7\u00A7MATH_DISPLAY_' + (displayMaths.length - 1) + '\u00A7\u00A7';
+        });
+        processed = processed.replace(/\\\[([\s\S]*?)\\\]/g, function(match, math) {
+            displayMaths.push(math.trim());
+            return '\u00A7\u00A7MATH_DISPLAY_' + (displayMaths.length - 1) + '\u00A7\u00A7';
+        });
+        processed = processed.replace(/\\\((.*?)\\\)/g, function(match, math) {
+            inlineMaths.push(math.trim());
+            return '\u00A7\u00A7MATH_INLINE_' + (inlineMaths.length - 1) + '\u00A7\u00A7';
+        });
+        processed = processed.replace(/(^|[^\w\$])\$(?!\$)([^$\n]+?)\$(?![a-zA-Z0-9])/g, function(match, before, math) {
+            inlineMaths.push(math.trim());
+            return before + '\u00A7\u00A7MATH_INLINE_' + (inlineMaths.length - 1) + '\u00A7\u00A7';
+        });
+
+        var html = marked.parse(processed);
+
+        html = html.replace(/\u00A7\u00A7INLINE_(\d+)\u00A7\u00A7/g, function(match, idx) {
+            var code = inlineCodes[parseInt(idx)] || '';
+            var escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return '<code>' + escaped + '</code>';
+        });
+
+        html = html.replace(/\u00A7\u00A7FENCED_(\d+)\u00A7\u00A7/g, function(match, idx) {
+            var block = fencedBlocks[parseInt(idx)] || { lang: '', code: '', unclosed: false };
+            var rawCode = block.code.trim();
+            rawCode = rawCode.replace(/\n{3,}/g, '\n\n');
+            var displayCode = rawCode.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            var encodedRaw = encodeURIComponent(rawCode);
+            var langClass = block.lang ? ' class="language-' + block.lang + '"' : '';
+
+            var unclosedLabel = block.unclosed
+                ? ' <span style="font-weight:normal;color:#999;font-size:10px;">(unclosed)</span>'
+                : '';
+
+            return '<div class="code-block-wrapper">' +
+                '<div class="code-header">' +
+                    '<span class="code-language">' + (block.lang || 'text') + unclosedLabel + '</span>' +
+                    '<div><button class="copy-btn" data-code="' + encodedRaw + '">Copy</button></div>' +
+                '</div>' +
+                '<pre><code' + langClass + '>' + displayCode + '</code></pre>' +
+            '</div>';
+        });
+
+        if (typeof katex !== 'undefined') {
+            html = html.replace(/<p>\s*\u00A7\u00A7MATH_DISPLAY_(\d+)\u00A7\u00A7\s*<\/p>/g, function(match, idx) {
+                var latex = displayMaths[parseInt(idx)] || '';
+                var rendered = safeKatex(latex, true);
+                var encodedLatex = encodeURIComponent(latex);
+                return '<div class="math-display-wrapper"><div class="math-display" style="position:relative;display:inline-block;" data-latex="' + encodedLatex + '">' + rendered + '<button class="math-copy-btn" data-latex="' + encodedLatex + '">Copy LaTeX</button></div></div>';
+            });
+            html = html.replace(/\u00A7\u00A7MATH_DISPLAY_(\d+)\u00A7\u00A7/g, function(match, idx) {
+                var latex = displayMaths[parseInt(idx)] || '';
+                var rendered = safeKatex(latex, true);
+                var encodedLatex = encodeURIComponent(latex);
+                return '<div class="math-display-wrapper"><div class="math-display" style="position:relative;display:inline-block;" data-latex="' + encodedLatex + '">' + rendered + '<button class="math-copy-btn" data-latex="' + encodedLatex + '">Copy LaTeX</button></div></div>';
+            });
+            html = html.replace(/\u00A7\u00A7MATH_INLINE_(\d+)\u00A7\u00A7/g, function(match, idx) {
+                var latex = inlineMaths[parseInt(idx)] || '';
+                var rendered = safeKatex(latex, false);
+                var encodedLatex = encodeURIComponent(latex);
+                return '<span class="math-inline-wrapper"><span class="math-inline" data-latex="' + encodedLatex + '">' + rendered + '</span><button class="math-copy-btn" data-latex="' + encodedLatex + '">Copy LaTeX</button></span>';
+            });
+        } else {
+            html = html.replace(/\u00A7\u00A7MATH_DISPLAY_(\d+)\u00A7\u00A7/g, function(m, i) { return '$$' + (displayMaths[parseInt(i)] || '') + '$$'; });
+            html = html.replace(/\u00A7\u00A7MATH_INLINE_(\d+)\u00A7\u00A7/g, function(m, i) { return '\\(' + (inlineMaths[parseInt(i)] || '') + '\\)'; });
+        }
+
+        html = html.replace(/<table([^>]*)>/g, function(match, attrs) {
+            if (/class="[^"]*\bmarkdown-table\b[^"]*"/.test(match)) return match;
+            if (/class="/.test(match)) return '<table' + attrs.replace(/class="([^"]*)"/, 'class="$1 markdown-table"') + '>';
+            return '<table class="markdown-table"' + attrs + '>';
+        });
+
+        return html;
+    } catch (e) {
+        try { window.pywebview.api.log_frontend_error('[renderContent] ' + e.message); } catch (_) {}
+        return escapeHtml(text);
+    }
+}
+
+chatContent.addEventListener('click', function(e) {
+    var copyBtn = e.target.closest('.copy-btn');
+    if (copyBtn) {
+        e.preventDefault(); e.stopPropagation();
+        var code = copyBtn.dataset.code;
+        if (code) fallbackCopy(decodeURIComponent(code));
+        return;
+    }
+
+    var mathCopyBtn = e.target.closest('.math-copy-btn');
+    if (mathCopyBtn) {
+        e.preventDefault(); e.stopPropagation();
+        var encodedLatex = mathCopyBtn.dataset.latex || '';
+        if (encodedLatex) fallbackCopy(decodeURIComponent(encodedLatex));
+        return;
+    }
+
+    var target = e.target.closest('a');
+    if (target && target.href) {
+        if (target.href.indexOf('http://') === 0 || target.href.indexOf('https://') === 0) {
+            e.preventDefault(); e.stopPropagation();
+            openExternal(target.href);
+        }
+        return;
+    }
+
+    var crBtn = e.target.closest('.copy-reply-btn');
+    if (crBtn) {
+        e.preventDefault(); e.stopPropagation();
+        var parentText = crBtn.closest('.assistant-text');
+        if (parentText) {
+            var rawText = parentText.dataset.raw || parentText.textContent || '';
+            fallbackCopy(rawText);
+        }
+        return;
+    }
+});
+
+function fallbackCopy(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {
+            showToast('Copied');
+        }).catch(function() {
+            _fallbackCopyExec(text);
+        });
+    } else {
+        _fallbackCopyExec(text);
+    }
+}
+
+function _fallbackCopyExec(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); showToast('Copied'); } catch(e) { showToast('Copy failed'); }
+    document.body.removeChild(ta);
+}
+
+function openExternal(url) {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.open_url) {
+        window.pywebview.api.open_url(url);
+    } else {
+        window.open(url, '_blank');
+    }
+}
+
+function openHTMLContent(htmlContent) {
+    if (!htmlContent || !htmlContent.trim()) return;
+    var fullHtml = htmlContent;
+    if (htmlContent.toLowerCase().indexOf('<!doctype') === -1 && htmlContent.toLowerCase().indexOf('<html') === -1) {
+        fullHtml = '<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n<title>HTML Preview</title>\n</head>\n<body>\n' + htmlContent + '\n</body>\n</html>';
+    }
+    var encoded = encodeURIComponent(fullHtml);
+    var dataUri = 'data:text/html;charset=utf-8,' + encoded;
+    openExternal(dataUri);
+}
+
+function createUserMessageDOM(text) {
+    var div = document.createElement('div');
+    div.className = 'message user-msg';
+    var inner = document.createElement('div');
+    inner.className = 'user-text';
+    inner.textContent = text;
+    div.appendChild(inner);
+    return div;
+}
+
+function appendError(msg) {
+    var div = document.createElement('div');
+    div.className = 'error-text';
+    div.textContent = msg;
+    chatContent.appendChild(div);
+    scrollChatToBottom();
+}
+
+function appendAskUser(question) {
+    var div = document.createElement('div');
+    div.className = 'question-bubble';
+    div.innerHTML = renderContent(question);
+    chatContent.appendChild(div);
+    scrollChatToBottom();
+}
+
+function showAskUserModal(question) {
+    hideConfirmWriteModal();
+    askUserQuestion.innerHTML = renderContent(question);
+    askUserReplyInput.value = '';
+    askUserReplyInput.style.height = 'auto';
+    askUserModal.style.display = 'block';
+    askUserReplyInput.focus();
+    statusText.textContent = 'Waiting for your reply...';
+}
+
+function hideAskUserModal() {
+    askUserModal.style.display = 'none';
+    askUserQuestion.innerHTML = '';
+    askUserReplyInput.value = '';
+}
+
+async function handleAskUserReply() {
+    var text = askUserReplyInput.value.trim();
+    if (!text) return;
+
+    var userDiv = createUserMessageDOM(text);
+    chatContent.appendChild(userDiv);
+    scrollChatToBottom();
+
+    hideAskUserModal();
+
+    try {
+        await window.pywebview.api.provide_user_input(text);
+    } catch(e) {
+        appendError('Reply failed: ' + e.message);
+        finishStream();
+    }
+}
+
+async function handleAskUserCancel() {
+    hideAskUserModal();
+    appendError('Task cancelled by user');
+    try { await window.pywebview.api.stop_task(); } catch(e) {}
+    if (pollingTimer) clearInterval(pollingTimer);
+    pollingTimer = null;
+    finishStream();
+}
+
+var TOOL_NAMES_CN = {
+    'write_file': '写入',
+    'delete_file': '删除',
+    'replace_in_file': '修改'
+};
+
+function showConfirmWriteModal(tool, path) {
+    hideAskUserModal();
+    var action = TOOL_NAMES_CN[tool] || tool;
+    confirmWriteMessage.textContent = '是否确认' + action + ' ' + path + ' ?';
+    confirmWriteDetail.textContent = tool === 'delete_file'
+        ? '此操作不可撤销，请谨慎确认。'
+        : '文件已存在时将被覆盖。';
+    confirmWriteModal.style.display = 'block';
+    statusText.textContent = 'Waiting for confirmation...';
+}
+
+function hideConfirmWriteModal() {
+    confirmWriteModal.style.display = 'none';
+    confirmWriteMessage.textContent = '';
+    confirmWriteDetail.textContent = '';
+}
+
+async function handleConfirmWriteConfirm() {
+    hideConfirmWriteModal();
+    statusText.textContent = 'Running...';
+    try {
+        await window.pywebview.api.provide_user_input('__confirm__');
+    } catch(e) {
+        appendError('Confirmation failed: ' + e.message);
+        finishStream();
+    }
+}
+
+async function handleConfirmWriteCancel() {
+    hideConfirmWriteModal();
+    statusText.textContent = 'Running...';
+    try {
+        await window.pywebview.api.provide_user_input('__cancel__');
+    } catch(e) {
+        appendError('Cancellation failed: ' + e.message);
+        finishStream();
+    }
+}
+
+function appendOrAccumulateThinking(text) {
+    if (!currentThinkingEl) {
+        var details = document.createElement('details');
+        details.className = 'reasoning-details';
+        details.open = true;
+        details.style.marginBottom = '8px';
+
+        var summary = document.createElement('summary');
+        summary.textContent = 'Thinking';
+        summary.style.cssText = 'cursor:pointer; font-size:0.9em; color:#555; padding:4px 0; user-select:none;';
+
+        var content = document.createElement('div');
+        content.className = 'reasoning-box';
+        content.style.marginBottom = '0';
+        content.dataset.raw = text;
+        content.textContent = text;
+
+        details.appendChild(summary);
+        details.appendChild(content);
+        chatContent.appendChild(details);
+
+        currentThinkingEl = details;
+        currentThinkingEl._content = content;
+    } else {
+        var c = currentThinkingEl._content;
+        c.dataset.raw += text;
+        c.textContent += text;
+    }
+    scrollChatToBottom();
+}
+
+function appendOrAccumulateReply(text) {
+    if (!currentReplyEl) {
+        var wrapper = document.createElement('div');
+        wrapper.className = 'message assistant-msg';
+
+        var inner = document.createElement('div');
+        inner.className = 'assistant-text';
+        inner.dataset.raw = text;
+        inner.innerHTML = renderContent(text);
+
+        var copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-reply-btn';
+        copyBtn.textContent = 'Copy';
+        inner.appendChild(copyBtn);
+
+        wrapper.appendChild(inner);
+        chatContent.appendChild(wrapper);
+
+        currentReplyEl = wrapper;
+        currentReplyEl._inner = inner;
+        currentReplyEl._copyBtn = copyBtn;
+    } else {
+        var inner = currentReplyEl._inner;
+        inner.dataset.raw += text;
+        inner.innerHTML = renderContent(inner.dataset.raw);
+        var existingBtn = inner.querySelector('.copy-reply-btn');
+        if (!existingBtn) {
+            var copyBtn = document.createElement('button');
+            copyBtn.className = 'copy-reply-btn';
+            copyBtn.textContent = 'Copy';
+            inner.appendChild(copyBtn);
+            currentReplyEl._copyBtn = copyBtn;
+        }
+    }
+    scrollChatToBottom();
+}
+
+function appendOrAccumulateCommand(text) {
+    if (!currentCmdEl) {
+        currentCmdEl = document.createElement('div');
+        currentCmdEl.className = 'reasoning-box';
+        currentCmdEl.style.fontFamily = 'monospace';
+        currentCmdEl.style.fontSize = '11px';
+        currentCmdEl.dataset.raw = text;
+        currentCmdEl.textContent = text;
+        cmdContent.appendChild(currentCmdEl);
+    } else {
+        currentCmdEl.dataset.raw += '\n' + text;
+        currentCmdEl.textContent += '\n' + text;
+    }
+    scrollCmdToBottom();
+}
+
+function flushAccumulated() {
+    if (currentReplyEl && currentReplyEl._inner) {
+        if (currentReplyEl._copyBtn) {
+            currentReplyEl._copyBtn.style.display = 'inline-block';
+        }
+    }
+    currentThinkingEl = null;
+    currentReplyEl = null;
+    currentCmdEl = null;
+}
+
+function handleEvent(event) {
+    if (event.indexOf('T:') === 0) {
+        appendOrAccumulateThinking(event.slice(2));
+    } else if (event.indexOf('R:') === 0) {
+        appendOrAccumulateReply(event.slice(2));
+    } else if (event.indexOf('C:') === 0) {
+        flushAccumulated();
+        appendOrAccumulateCommand(event.slice(2));
+    } else if (event.indexOf('U:') === 0) {
+        try {
+            var usage = JSON.parse(event.slice(2));
+            updateTokenDisplay(usage);
+        } catch(e) {}
+    } else if (event.indexOf('E:') === 0) {
+        flushAccumulated();
+        appendError(event.slice(2));
+    } else if (event.indexOf('WC:') === 0) {
+        flushAccumulated();
+        var confirmData;
+        try {
+            confirmData = JSON.parse(event.slice(3));
+        } catch(e) {
+            confirmData = { tool: 'write_file', path: '' };
+        }
+        showConfirmWriteModal(confirmData.tool, confirmData.path);
+    } else if (event.indexOf('Q:') === 0) {
+        flushAccumulated();
+        var question;
+        try {
+            question = JSON.parse(event.slice(2));
+        } catch(e) {
+            question = event.slice(2);
+        }
+        appendAskUser(question);
+        showAskUserModal(question);
+    } else if (event.indexOf('D:') === 0) {
+        var directText = event.slice(2);
+        if (currentReplyEl && currentReplyEl._inner) {
+            if (currentReplyEl._copyBtn) {
+                currentReplyEl._copyBtn.style.display = 'inline-block';
+            }
+            currentThinkingEl = null;
+            currentReplyEl = null;
+            currentCmdEl = null;
+        } else {
+            flushAccumulated();
+            var wrapper = document.createElement('div');
+            wrapper.className = 'message assistant-msg';
+            var inner = document.createElement('div');
+            inner.className = 'assistant-text';
+            inner.dataset.raw = directText;
+            inner.innerHTML = renderContent(directText);
+            var copyBtn = document.createElement('button');
+            copyBtn.className = 'copy-reply-btn';
+            copyBtn.textContent = 'Copy';
+            copyBtn.style.display = 'inline-block';
+            inner.appendChild(copyBtn);
+            wrapper.appendChild(inner);
+            chatContent.appendChild(wrapper);
+        }
+        scrollChatToBottom();
+    }
+}
+
+function startPolling() {
+    if (pollingTimer) clearInterval(pollingTimer);
+    resetTokenDisplay();
+    pollingTimer = setInterval(async function() {
+        try {
+            var event = await window.pywebview.api.get_next_event();
+            if (event === null) {
+                clearInterval(pollingTimer);
+                pollingTimer = null;
+                finishStream();
+                return;
+            }
+            if (event === 'WAIT') return;
+            handleEvent(event);
+        } catch(e) {
+            clearInterval(pollingTimer);
+            pollingTimer = null;
+            finishStream();
+            appendError('Polling error: ' + e.message);
+        }
+    }, 50);
+}
+
+function finishStream() {
+    flushAccumulated();
+    hideAskUserModal();
+    hideConfirmWriteModal();
+    isStreaming = false;
+    isWaiting = false;
+    stopBtn.style.display = 'none';
+    sendBtn.style.display = 'inline-block';
+    statusText.textContent = 'Ready';
+    resetTextareaHeight();
+    userInput.focus();
+}
+
+function autoResizeTextarea() {
+    userInput.style.height = 'auto';
+    userInput.style.height = Math.min(userInput.scrollHeight, 200) + 'px';
+}
+
+function resetTextareaHeight() {
+    userInput.style.height = '';
+}
+
+function resetTextarea() {
+    userInput.style.height = '';
+    userInput.value = '';
+}
+
+function insertNewlineAtCursor() {
+    var start = userInput.selectionStart;
+    var end = userInput.selectionEnd;
+    var value = userInput.value;
+    userInput.value = value.substring(0, start) + '\n' + value.substring(end);
+    userInput.selectionStart = userInput.selectionEnd = start + 1;
+    autoResizeTextarea();
+}
+
+var ALLOWED_EXTS = [
+    'txt', 'py', 'json', 'csv', 'css', 'html', 'md', 'js',
+    'ts', 'tsx', 'jsx', 'yaml', 'yml', 'toml', 'xml',
+    'sh', 'bat', 'ps1', 'ini', 'cfg', 'log', 'sql',
+    'rs', 'go', 'c', 'cpp', 'h', 'java', 'kt', 'swift',
+    'rb', 'php', 'lua', 'r', 'm', 'mm',
+    'pdf', 'docx', 'xlsx'
+];
+
+function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function getFileIcon(ext) {
+    var icons = {
+        'py':'🐍', 'js':'📜', 'ts':'📘', 'tsx':'📘', 'jsx':'📜',
+        'html':'🌐', 'css':'🎨', 'json':'📋', 'csv':'📊',
+        'txt':'📄', 'md':'📝', 'pdf':'📕', 'docx':'📘', 'xlsx':'📗',
+        'yaml':'⚙️', 'yml':'⚙️', 'toml':'⚙️',
+        'rs':'🦀', 'go':'🐹', 'java':'☕', 'kt':'📱', 'swift':'🍎',
+        'c':'⚡', 'cpp':'⚡', 'h':'⚡',
+        'sh':'💻', 'bat':'💻', 'ps1':'💻',
+        'sql':'🗄️', 'rb':'💎', 'php':'🐘', 'lua':'🌙', 'r':'📊',
+        'xml':'📋', 'ini':'⚙️', 'cfg':'⚙️', 'log':'📄'
+    };
+    return icons[ext] || '📎';
+}
+
+async function readFileAsDataURL(file) {
+    return new Promise(function(resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            var full = e.target.result;
+            var commaIdx = full.indexOf(',');
+            resolve(commaIdx >= 0 ? full.substring(commaIdx + 1) : full);
+        };
+        reader.onerror = function(e) { reject(e.target.error); };
+        reader.readAsDataURL(file);
+    });
+}
+
+async function handleFiles(fileList) {
+    var added = 0;
+    for (var i = 0; i < fileList.length; i++) {
+        var file = fileList[i];
+        if (file.size > 10 * 1024 * 1024) {
+            showToast('File too large: ' + file.name + ' (max 10MB)');
+            continue;
+        }
+        var ext = file.name.split('.').pop().toLowerCase();
+        if (ALLOWED_EXTS.indexOf(ext) === -1) {
+            showToast('Unsupported format: ' + file.name + ' (.' + ext + ')');
+            continue;
+        }
+        try {
+            var data = await readFileAsDataURL(file);
+            selectedFiles.push({ name: file.name, size: file.size, type: ext, data: data });
+            added++;
+        } catch(err) {
+            showToast('Read error: ' + file.name + ' - ' + err.message);
+        }
+    }
+    if (added > 0) {
+        updateFileBadges();
+        showToast('Added ' + added + ' file(s)');
+        userInput.focus();
+    }
+}
+
+function updateFileBadges() {
+    if (selectedFiles.length === 0) {
+        fileBadges.innerHTML = '';
+        return;
+    }
+    var html = '';
+    for (var i = 0; i < selectedFiles.length; i++) {
+        var f = selectedFiles[i];
+        html += '<span class="file-badge">📄 ' + f.name + ' (' + formatSize(f.size) + ')<span class="remove" data-index="' + i + '">✕</span></span>';
+    }
+    fileBadges.innerHTML = html;
+
+    var removes = fileBadges.querySelectorAll('.remove');
+    for (var j = 0; j < removes.length; j++) {
+        removes[j].addEventListener('click', function(e) {
+            e.stopPropagation();
+            var idx = parseInt(this.dataset.index);
+            selectedFiles.splice(idx, 1);
+            updateFileBadges();
+            showToast('File removed');
+        });
+    }
+}
+
+document.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    var inputArea = document.querySelector('.input-area');
+    if (inputArea) inputArea.style.background = '#e8f0fe';
+});
+
+document.addEventListener('dragleave', function(e) {
+    e.preventDefault();
+    var inputArea = document.querySelector('.input-area');
+    if (inputArea) inputArea.style.background = '';
+});
+
+document.addEventListener('drop', function(e) {
+    e.preventDefault();
+    var inputArea = document.querySelector('.input-area');
+    if (inputArea) inputArea.style.background = '';
+    if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+        handleFiles(e.dataTransfer.files);
+    }
+});
+
+document.addEventListener('paste', function(e) {
+    var files = [];
+    for (var i = 0; i < e.clipboardData.items.length; i++) {
+        var item = e.clipboardData.items[i];
+        if (item.kind === 'file') files.push(item.getAsFile());
+    }
+    if (files.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleFiles(files);
+    }
+});
+
+async function loadHistory() {
+    try {
+        var history = await window.pywebview.api.get_initial_messages();
+        if (history && history.length) {
+            for (var i = 0; i < history.length; i++) {
+                var msg = history[i];
+                var div = document.createElement('div');
+                div.className = 'message';
+                if (msg.role === 'user') {
+                    div.className += ' user-msg';
+                    var userInner = document.createElement('div');
+                    userInner.className = 'user-text';
+                    userInner.style.whiteSpace = 'pre-wrap';
+                    userInner.textContent = msg.content || '';
+                    div.appendChild(userInner);
+                } else {
+                    div.className += ' assistant-msg';
+                    var inner = document.createElement('div');
+                    inner.className = 'assistant-text';
+                    inner.dataset.raw = msg.content || '';
+                    inner.innerHTML = renderContent(msg.content || '');
+                    var copyBtn = document.createElement('button');
+                    copyBtn.className = 'copy-reply-btn';
+                    copyBtn.textContent = 'Copy';
+                    copyBtn.style.display = 'inline-block';
+                    inner.appendChild(copyBtn);
+                    div.appendChild(inner);
+                }
+                chatContent.appendChild(div);
+            }
+            scrollChatToBottom();
+        }
+        try {
+            var memoryContent = await window.pywebview.api.get_memory_content();
+            if (memoryContent) {
+                var memDiv = document.createElement('div');
+                memDiv.className = 'message assistant-msg';
+                var memInner = document.createElement('div');
+                memInner.className = 'assistant-text';
+                memInner.style.cssText = 'background:#f0f0f0;color:#666;font-size:0.9em;padding:8px 12px;';
+                memInner.textContent = '💾 Memory loaded from previous session';
+                memDiv.appendChild(memInner);
+                chatContent.appendChild(memDiv);
+                scrollChatToBottom();
+            }
+        } catch(e) {
+            console.warn('Failed to check memory:', e);
+        }
+    } catch(e) {
+        console.warn('Failed to load history:', e);
+    }
+}
+
+async function handleSend() {
+    var text = userInput.value.trim();
+    if (selectedFiles.length === 0 && !text) {
+        showToast('Please enter text or select files');
+        return;
+    }
+
+    if (askUserModal.style.display === 'block') {
+        showToast('Please reply to the Agent question first');
+        return;
+    }
+
+    if (confirmWriteModal.style.display === 'block') {
+        showToast('Please confirm or cancel the pending operation first');
+        return;
+    }
+
+    if (isStreaming) {
+        showToast('Agent is still responding, please wait...');
+        return;
+    }
+
+    var userDiv = document.createElement('div');
+    userDiv.className = 'message user-msg';
+    var userInner = document.createElement('div');
+    userInner.className = 'user-text';
+    var userHtml = '';
+
+    if (selectedFiles.length > 0) {
+        userHtml += '<div class="file-list">';
+        for (var i = 0; i < selectedFiles.length; i++) {
+            var f = selectedFiles[i];
+            var icon = getFileIcon(f.type);
+            userHtml += '<div class="file-card"><div class="file-name"><span class="file-icon">' + icon + '</span>' + f.name + '</div><div class="file-meta">' + formatSize(f.size) + ' <span style="background:#e8e8e8;padding:0 4px;border-radius:2px;font-size:10px;">.' + f.type + '</span></div></div>';
+        }
+        userHtml += '</div>';
+    }
+    if (text) {
+        userHtml += '<div style="margin-top:3px;white-space:pre-wrap;">' + escapeHtml(text) + '</div>';
+    }
+    userInner.innerHTML = userHtml;
+    userDiv.appendChild(userInner);
+    chatContent.appendChild(userDiv);
+    scrollChatToBottom();
+
+    var filesToSend = selectedFiles.map(function(f) {
+        return { name: f.name, size: f.size, type: f.type, data: f.data };
+    });
+    selectedFiles = [];
+    updateFileBadges();
+    userInput.value = '';
+    resetTextareaHeight();
+
+    isWaiting = true;
+    isStreaming = true;
+    sendBtn.style.display = 'none';
+    stopBtn.style.display = 'inline-block';
+    statusText.textContent = 'Running...';
+
+    try {
+        var uploadedFiles = [];
+        if (filesToSend.length > 0) {
+            uploadedFiles = await window.pywebview.api.upload_files(filesToSend);
+        }
+
+        var fullMessage = text;
+        if (uploadedFiles.length > 0) {
+            var fileContents = uploadedFiles.map(function(uf) {
+                if (uf.error) {
+                    return '[File: ' + uf.name + '] Error: ' + uf.error;
+                }
+                return '[File: ' + uf.name + ' (' + uf.type + ')]\n' + uf.content;
+            }).join('\n\n---\n\n');
+            if (fullMessage) {
+                fullMessage = fullMessage + '\n\n--- Attached Files ---\n' + fileContents;
+            } else {
+                fullMessage = '--- Attached Files ---\n' + fileContents;
+            }
+        }
+
+        var result = await window.pywebview.api.send_message(fullMessage);
+        if (result && result.indexOf('error:') === 0) {
+            appendError(result.slice(6));
+            finishStream();
+            return;
+        }
+        startPolling();
+    } catch(e) {
+        appendError('Send failed: ' + e.message);
+        finishStream();
+    }
+}
+
+async function handleStop() {
+    try {
+        await window.pywebview.api.stop_task();
+        hideAskUserModal();
+        hideConfirmWriteModal();
+        if (pollingTimer) clearInterval(pollingTimer);
+        pollingTimer = null;
+        finishStream();
+        showToast('Task stopped');
+    } catch(e) {
+        showToast('Stop failed: ' + e.message);
+    }
+}
+
+askUserReplyBtn.addEventListener('click', handleAskUserReply);
+askUserCancelBtn.addEventListener('click', handleAskUserCancel);
+
+askUserReplyInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey) {
+        e.preventDefault();
+        handleAskUserReply();
+    } else if (e.key === 'Enter' && (e.ctrlKey || e.shiftKey)) {
+        e.preventDefault();
+        var start = askUserReplyInput.selectionStart;
+        var end = askUserReplyInput.selectionEnd;
+        var value = askUserReplyInput.value;
+        askUserReplyInput.value = value.substring(0, start) + '\n' + value.substring(end);
+        askUserReplyInput.selectionStart = askUserReplyInput.selectionEnd = start + 1;
+    } else if (e.key === 'Escape') {
+        e.preventDefault();
+        handleAskUserCancel();
+    }
+});
+
+askUserModal.addEventListener('click', function(e) {
+    if (e.target === askUserModal) {
+        handleAskUserCancel();
+    }
+});
+
+confirmWriteConfirmBtn.addEventListener('click', handleConfirmWriteConfirm);
+confirmWriteCancelBtn.addEventListener('click', handleConfirmWriteCancel);
+
+confirmWriteModal.addEventListener('click', function(e) {
+    if (e.target === confirmWriteModal) {
+        handleConfirmWriteCancel();
+    }
+});
+
+document.addEventListener('keydown', function(e) {
+    if (confirmWriteModal.style.display === 'block') {
+        if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey) {
+            e.preventDefault();
+            handleConfirmWriteConfirm();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            handleConfirmWriteCancel();
+        }
+    }
+});
+
+var DEFAULT_MODELS = ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner'];
+
+function ensureModelOptions(select, currentModel) {
+    if (select.options.length === 0) {
+        for (var i = 0; i < DEFAULT_MODELS.length; i++) {
+            var opt = document.createElement('option');
+            opt.value = DEFAULT_MODELS[i];
+            opt.textContent = DEFAULT_MODELS[i];
+            select.appendChild(opt);
+        }
+    }
+    var validModel = currentModel;
+    if (!validModel || validModel === '.' || validModel.trim() === '') {
+        validModel = DEFAULT_MODELS[0];
+    }
+    var found = false;
+    for (var j = 0; j < select.options.length; j++) {
+        if (select.options[j].value === validModel) { found = true; break; }
+    }
+    if (!found) {
+        select.value = select.options[0].value;
+    } else {
+        select.value = validModel;
+    }
+}
+
+async function fetchModels(baseUrl) {
+    var statusEl = document.getElementById('cfg-models-status');
+    if (statusEl) statusEl.textContent = 'Loading...';
+    try {
+        var result = await window.pywebview.api.get_models_with_base(baseUrl);
+        if (result && result.error) {
+            if (statusEl) statusEl.textContent = result.error;
+            ensureModelOptions(document.getElementById('cfg-model'), config.model);
+            return;
+        }
+        var select = document.getElementById('cfg-model');
+        if (!select) return;
+        select.innerHTML = '';
+        var models = Array.isArray(result) ? result : [];
+        for (var i = 0; i < models.length; i++) {
+            var m = models[i];
+            var id = typeof m === 'string' ? m : (m.id || m);
+            var opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = id;
+            select.appendChild(opt);
+        }
+        ensureModelOptions(select, config.model);
+        if (statusEl) statusEl.textContent = 'Fetched ' + models.length + ' models';
+    } catch(e) {
+        if (statusEl) statusEl.textContent = 'Failed: ' + (e.message || e);
+        ensureModelOptions(document.getElementById('cfg-model'), config.model);
+    }
+}
+
+async function openSettings() {
+    try { config = await window.pywebview.api.get_config(); } catch(e) { config = {}; }
+
+    document.getElementById('cfg-api-base').value = config.api_base || 'https://api.deepseek.com';
+    document.getElementById('cfg-project-root').value = config.project_root || '';
+    document.getElementById('cfg-queue-size').value = config.queue_max_size || 200;
+    document.getElementById('cfg-max-steps').value = config.max_steps || 128;
+    document.getElementById('cfg-task-timeout').value = config.task_timeout || 0;
+    document.getElementById('cfg-web-search').checked = config.enable_web_search || false;
+    document.getElementById('cfg-confirm-write-delete').checked = config.confirm_write_delete !== false;
+
+    var thinkLevel = config.think_level || '高';
+    document.getElementById('cfg-think-level').value = thinkLevel;
+    var temp = config.temperature !== undefined ? config.temperature : 1.0;
+    document.getElementById('cfg-temperature').value = Math.round(temp * 10);
+    document.getElementById('cfg-temperature-value').textContent = temp.toFixed(1);
+    document.getElementById('cfg-max-tokens').value = config.max_tokens || 32767;
+    updateThinkMutualExclusion();
+
+    document.getElementById('cfg-memory').checked = config.memory !== false;
+    document.getElementById('cfg-memory-mode').value = config.memory_mode || 'full';
+    document.getElementById('cfg-max-rounds').value = config.max_rounds || 10;
+
+    updateQueueWarning();
+    settingsModal.style.display = 'block';
+    fetchModels(config.api_base || 'https://api.deepseek.com');
+}
+
+function updateThinkMutualExclusion() {
+    var isThink = document.getElementById('cfg-think-level').value !== '关';
+    var tempSlider = document.getElementById('cfg-temperature');
+    tempSlider.disabled = isThink;
+    var hint = document.getElementById('cfg-think-hint');
+    if (hint) hint.style.display = isThink ? 'block' : 'none';
+}
+
+function updateQueueWarning() {
+    var val = parseInt(document.getElementById('cfg-queue-size').value) || 200;
+    document.getElementById('queue-warning').style.display = val > 300 ? 'block' : 'none';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    var thinkSelect = document.getElementById('cfg-think-level');
+    if (thinkSelect) {
+        thinkSelect.addEventListener('change', updateThinkMutualExclusion);
+    }
+
+    var tempSlider = document.getElementById('cfg-temperature');
+    if (tempSlider) {
+        tempSlider.addEventListener('input', function() {
+            document.getElementById('cfg-temperature-value').textContent = (this.value / 10).toFixed(1);
+        });
+    }
+
+    var baseInput = document.getElementById('cfg-api-base');
+    if (baseInput) {
+        baseInput.addEventListener('change', function() {
+            var url = baseInput.value.trim() || 'https://api.deepseek.com';
+            fetchModels(url);
+        });
+    }
+    document.getElementById('cfg-refresh-models').addEventListener('click', function() {
+        var url = document.getElementById('cfg-api-base').value.trim() || 'https://api.deepseek.com';
+        fetchModels(url);
+    });
+});
+
+async function saveSettings() {
+    var modelVal = document.getElementById('cfg-model').value;
+    if (!modelVal || modelVal.trim() === '' || modelVal.trim() === '.') {
+        showToast('Please select a valid model');
+        return;
+    }
+    var newConfig = {
+        model: modelVal.trim(),
+        api_base: document.getElementById('cfg-api-base').value.trim(),
+        project_root: document.getElementById('cfg-project-root').value.trim(),
+        queue_max_size: parseInt(document.getElementById('cfg-queue-size').value) || 200,
+        max_steps: parseInt(document.getElementById('cfg-max-steps').value) || 128,
+        task_timeout: parseInt(document.getElementById('cfg-task-timeout').value) || 0,
+        enable_web_search: document.getElementById('cfg-web-search').checked,
+        confirm_write_delete: document.getElementById('cfg-confirm-write-delete').checked,
+        think_level: document.getElementById('cfg-think-level').value,
+        temperature: parseFloat(document.getElementById('cfg-temperature-value').textContent) || 1.0,
+        max_tokens: parseInt(document.getElementById('cfg-max-tokens').value) || 32767,
+        memory: document.getElementById('cfg-memory').checked,
+        memory_mode: document.getElementById('cfg-memory-mode').value,
+        max_rounds: parseInt(document.getElementById('cfg-max-rounds').value) || 10
+    };
+
+    try {
+        await window.pywebview.api.save_config(newConfig);
+        config = newConfig;
+        settingsModal.style.display = 'none';
+        showToast('Settings saved');
+    } catch(e) {
+        showToast('Save failed: ' + e.message);
+    }
+}
+
+document.getElementById('browse-project-root').addEventListener('click', function() {
+    window.pywebview.api.pick_directory().then(function(path) {
+        if (path) document.getElementById('cfg-project-root').value = path;
+    }).catch(function() {
+        var path = prompt('Enter project directory path:');
+        if (path) document.getElementById('cfg-project-root').value = path;
+    });
+});
+
+async function restoreDefaults() {
+    if (!confirm('Are you sure you want to restore all settings to their defaults? This cannot be undone.')) {
+        return;
+    }
+    try {
+        config = await window.pywebview.api.reset_config();
+        document.getElementById('cfg-api-base').value = config.api_base || 'https://api.deepseek.com';
+        document.getElementById('cfg-project-root').value = config.project_root || '';
+        document.getElementById('cfg-queue-size').value = config.queue_max_size || 200;
+        document.getElementById('cfg-max-steps').value = config.max_steps || 128;
+        document.getElementById('cfg-task-timeout').value = config.task_timeout || 0;
+        document.getElementById('cfg-web-search').checked = config.enable_web_search || false;
+        document.getElementById('cfg-confirm-write-delete').checked = config.confirm_write_delete !== false;
+        document.getElementById('cfg-think-level').value = config.think_level || '高';
+        var temp = config.temperature !== undefined ? config.temperature : 1.0;
+        document.getElementById('cfg-temperature').value = Math.round(temp * 10);
+        document.getElementById('cfg-temperature-value').textContent = temp.toFixed(1);
+        document.getElementById('cfg-max-tokens').value = config.max_tokens || 32767;
+        document.getElementById('cfg-memory').checked = config.memory !== false;
+        document.getElementById('cfg-memory-mode').value = config.memory_mode || 'full';
+        document.getElementById('cfg-max-rounds').value = config.max_rounds || 10;
+        updateThinkMutualExclusion();
+        updateQueueWarning();
+        ensureModelOptions(document.getElementById('cfg-model'), config.model);
+        showToast('Settings restored to defaults');
+    } catch(e) {
+        showToast('Restore failed: ' + e.message);
+    }
+}
+
+function showApiKeyModal() {
+    document.getElementById('apikey-input').value = '';
+    apikeyModal.style.display = 'block';
+    document.getElementById('apikey-input').focus();
+}
+
+async function confirmApiKey() {
+    var key = document.getElementById('apikey-input').value.trim();
+    if (!key) return;
+    try {
+        var result = await window.pywebview.api.set_api_key(key);
+        if (result === 'ok') {
+            apikeyModal.style.display = 'none';
+            showToast('API key updated');
+        } else {
+            showToast('Invalid API key');
+            document.getElementById('apikey-input').value = '';
+            document.getElementById('apikey-input').focus();
+        }
+    } catch(e) { showToast('Error: ' + e.message); }
+}
+
+async function showBalance() {
+    try {
+        var data = await window.pywebview.api.get_balance();
+        if (data.error) {
+            showToast('Balance query failed: ' + data.error);
+        } else if (data.balance_infos && data.balance_infos.length > 0) {
+            var info = data.balance_infos[0];
+            alert('Balance: \u00A5' + info.total_balance + '\n(Granted: \u00A5' + info.granted_balance + ', Topped up: \u00A5' + info.topped_up_balance + ')');
+        } else {
+            showToast('Balance data unavailable');
+        }
+    } catch(e) { showToast('Query failed: ' + e.message); }
+}
+
+sendBtn.addEventListener('click', handleSend);
+stopBtn.addEventListener('click', handleStop);
+document.getElementById('key-btn').addEventListener('click', showApiKeyModal);
+document.getElementById('settings-btn').addEventListener('click', openSettings);
+document.getElementById('settings-save-btn').addEventListener('click', saveSettings);
+document.getElementById('settings-cancel').addEventListener('click', function() { settingsModal.style.display = 'none'; });
+document.getElementById('settings-restore-defaults').addEventListener('click', restoreDefaults);
+
+document.getElementById('clear-memory-btn').addEventListener('click', async function() {
+    if (!confirm('Clear all saved conversation history? This cannot be undone.')) {
+        return;
+    }
+    try {
+        var result = await window.pywebview.api.clear_memory();
+        if (result) {
+            document.getElementById('memory-status').textContent = 'Memory cleared';
+            showToast('Memory cleared');
+        } else {
+            document.getElementById('memory-status').textContent = 'No memory to clear';
+            showToast('No memory to clear');
+        }
+    } catch(e) {
+        showToast('Failed to clear memory: ' + e.message);
+    }
+});
+document.getElementById('cfg-queue-size').addEventListener('input', updateQueueWarning);
+document.getElementById('balance-btn').addEventListener('click', showBalance);
+document.getElementById('about-btn').addEventListener('click', function() { aboutModal.style.display = 'block'; });
+document.getElementById('about-close-btn').addEventListener('click', function() { aboutModal.style.display = 'none'; });
+
+document.getElementById('apikey-confirm-btn').addEventListener('click', confirmApiKey);
+document.getElementById('apikey-cancel-btn').addEventListener('click', function() { apikeyModal.style.display = 'none'; });
+document.getElementById('apikey-get-btn').addEventListener('click', function() {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.open_url) {
+        window.pywebview.api.open_url('https://platform.deepseek.com/');
+    } else {
+        window.open('https://platform.deepseek.com/', '_blank');
+    }
+});
+
+userInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+    } else if (e.key === 'Enter' && (e.ctrlKey || e.shiftKey)) {
+        e.preventDefault();
+        insertNewlineAtCursor();
+    }
+});
+userInput.addEventListener('input', autoResizeTextarea);
+
+apikeyModal.addEventListener('click', function(e) { if (e.target === apikeyModal) apikeyModal.style.display = 'none'; });
+aboutModal.addEventListener('click', function(e) { if (e.target === aboutModal) aboutModal.style.display = 'none'; });
+
+function checkCDN() {
+    var missing = [];
+    if (typeof marked === 'undefined') missing.push('marked');
+    if (typeof katex === 'undefined') missing.push('katex');
+    if (missing.length > 0) {
+        reloadCDN();
+    }
+}
+
+function reloadCDN() {
+    if (typeof marked === 'undefined') {
+        var script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
+        document.head.appendChild(script);
+    }
+    if (typeof katex === 'undefined') {
+        if (!document.querySelector('link[href*="katex.min.css"]')) {
+            var link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css';
+            document.head.appendChild(link);
+        }
+        var script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js';
+        document.head.appendChild(script);
+    }
+}
+
+setInterval(function() {
+    if (navigator.onLine) {
+        if (typeof marked === 'undefined' || typeof katex === 'undefined') {
+            checkCDN();
+        }
+    }
+}, 3000);
+
+setTimeout(function() {
+    if (navigator.onLine) {
+        if (typeof marked === 'undefined' || typeof katex === 'undefined') {
+            checkCDN();
+        }
+    }
+}, 1000);
+
+var wizParticlesRunning = false;
+var wizParticlesAnimId = null;
+
+function startWizParticles() {
+    if (wizParticlesRunning) return;
+    wizParticlesRunning = true;
+    var canvas = document.getElementById('wiz-particles');
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    var W, H;
+    var particles = [];
+    var PARTICLE_COUNT = 80;
+
+    function resize() {
+        W = canvas.width = window.innerWidth;
+        H = canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    for (var i = 0; i < PARTICLE_COUNT; i++) {
+        var p = {
+            x: Math.random() * W,
+            y: Math.random() * H,
+            r: Math.random() * 2 + 0.6,
+            vx: (Math.random() - 0.5) * 0.35,
+            vy: (Math.random() - 0.5) * 0.35,
+            alpha: Math.random() * 0.5 + 0.2,
+            alphaDir: Math.random() > 0.5 ? 1 : -1,
+            alphaSpeed: Math.random() * 0.005 + 0.002
+        };
+        if (i < 12) { p.r = Math.random() * 2 + 1.5; p.alpha = 0.5 + Math.random() * 0.4; }
+        particles.push(p);
+    }
+
+    function draw() {
+        if (!wizParticlesRunning) return;
+        ctx.clearRect(0, 0, W, H);
+        for (var i = 0; i < particles.length; i++) {
+            for (var j = i + 1; j < particles.length; j++) {
+                var dx = particles[i].x - particles[j].x;
+                var dy = particles[i].y - particles[j].y;
+                var dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 120) {
+                    ctx.beginPath();
+                    ctx.moveTo(particles[i].x, particles[i].y);
+                    ctx.lineTo(particles[j].x, particles[j].y);
+                    ctx.strokeStyle = 'rgba(0,122,255,' + (0.04 * (1 - dist / 120)) + ')';
+                    ctx.lineWidth = 0.5;
+                    ctx.stroke();
+                }
+            }
+        }
+        for (var k = 0; k < particles.length; k++) {
+            var p = particles[k];
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(180,200,255,' + p.alpha + ')';
+            ctx.fill();
+            p.x += p.vx;
+            p.y += p.vy;
+            p.alpha += p.alphaDir * p.alphaSpeed;
+            if (p.alpha > 0.75) { p.alphaDir = -1; }
+            if (p.alpha < 0.1) { p.alphaDir = 1; }
+            if (p.x < -10) p.x = W + 10;
+            if (p.x > W + 10) p.x = -10;
+            if (p.y < -10) p.y = H + 10;
+            if (p.y > H + 10) p.y = -10;
+        }
+        wizParticlesAnimId = requestAnimationFrame(draw);
+    }
+    draw();
+}
+
+function stopWizParticles() {
+    wizParticlesRunning = false;
+    if (wizParticlesAnimId) {
+        cancelAnimationFrame(wizParticlesAnimId);
+        wizParticlesAnimId = null;
+    }
+}
+
+var wizCurrentStep = 0;
+var wizTotalSteps = 4;
+
+function wizUpdateStepIndicators() {
+    var dots = document.querySelectorAll('.wiz-step-dot');
+    var lines = document.querySelectorAll('.wiz-step-line');
+    dots.forEach(function(dot, i) {
+        dot.classList.remove('active', 'done');
+        if (i < wizCurrentStep) dot.classList.add('done');
+        if (i === wizCurrentStep) dot.classList.add('active');
+    });
+    lines.forEach(function(line, i) {
+        line.classList.toggle('done', i < wizCurrentStep);
+    });
+}
+
+function wizSwitchCard(fromIdx, toIdx) {
+    var cards = document.querySelectorAll('.wiz-card');
+    if (fromIdx >= 0 && fromIdx < cards.length) {
+        cards[fromIdx].classList.remove('active');
+        cards[fromIdx].classList.add('leaving');
+    }
+    if (toIdx >= 0 && toIdx < cards.length) {
+        cards[toIdx].classList.remove('leaving');
+        void cards[toIdx].offsetWidth;
+        cards[toIdx].classList.add('active');
+    }
+    wizUpdateStepIndicators();
+}
+
+function wizNextStep() {
+    if (wizCurrentStep >= wizTotalSteps - 1) return;
+    if (wizCurrentStep === 1) {
+        var key = document.getElementById('wiz-apikey').value.trim();
+        if (!key) {
+            var statusEl = document.getElementById('wiz-key-status');
+            statusEl.textContent = 'Please enter your API key';
+            statusEl.className = 'wiz-status err';
+            document.getElementById('wiz-apikey').focus();
+            wizShakeCard(1);
+            return;
+        }
+        if (!wizKeyVerified) {
+            wizVerifyAndProceed();
+            return;
+        }
+    }
+    var prev = wizCurrentStep;
+    wizCurrentStep++;
+    if (wizCurrentStep === 3) wizUpdateSummary();
+    wizSwitchCard(prev, wizCurrentStep);
+}
+
+function wizPrevStep() {
+    if (wizCurrentStep <= 0) return;
+    var prev = wizCurrentStep;
+    wizCurrentStep--;
+    wizSwitchCard(prev, wizCurrentStep);
+}
+
+var wizKeyVerified = false;
+var wizKeyVerifying = false;
+
+async function wizVerifyKey() {
+    if (wizKeyVerifying) return;
+    var key = document.getElementById('wiz-apikey').value.trim();
+    var baseUrl = document.getElementById('wiz-api-base').value.trim() || 'https://api.deepseek.com';
+    var statusEl = document.getElementById('wiz-key-status');
+
+    if (!key) {
+        statusEl.textContent = 'Please enter your API key first';
+        statusEl.className = 'wiz-status err';
+        return;
+    }
+
+    wizKeyVerifying = true;
+    wizKeyVerified = false;
+    statusEl.textContent = 'Verifying...';
+    statusEl.className = 'wiz-status info';
+    document.getElementById('wiz-verify-key').textContent = '⏳ Verifying...';
+    document.getElementById('wiz-verify-key').disabled = true;
+
+    try {
+        var result = await window.pywebview.api.validate_api_key(key, baseUrl);
+        if (result === 'ok') {
+            wizKeyVerified = true;
+            statusEl.textContent = '✅ API key is valid';
+            statusEl.className = 'wiz-status ok';
+            document.getElementById('wiz-verify-key').textContent = '✅ Verified';
+        } else {
+            var errMsg = result.replace('error:', '');
+            statusEl.textContent = '❌ ' + (errMsg || 'Invalid API key or base URL');
+            statusEl.className = 'wiz-status err';
+            document.getElementById('wiz-verify-key').textContent = '🔍 Retry Verify';
+        }
+    } catch(e) {
+        statusEl.textContent = '❌ Verification failed: ' + (e.message || e);
+        statusEl.className = 'wiz-status err';
+        document.getElementById('wiz-verify-key').textContent = '🔍 Retry Verify';
+    }
+
+    wizKeyVerifying = false;
+    document.getElementById('wiz-verify-key').disabled = false;
+}
+
+async function wizVerifyAndProceed() {
+    await wizVerifyKey();
+    if (wizKeyVerified) {
+        var prev = wizCurrentStep;
+        wizCurrentStep++;
+        if (wizCurrentStep === 3) wizUpdateSummary();
+        wizSwitchCard(prev, wizCurrentStep);
+    }
+}
+
+function wizShakeCard(cardIdx) {
+    var card = document.querySelectorAll('.wiz-card')[cardIdx];
+    if (!card) return;
+    card.style.transition = 'transform 0.1s ease';
+    card.style.transform = 'translateX(-6px)';
+    setTimeout(function() { card.style.transform = 'translateX(6px)'; }, 100);
+    setTimeout(function() { card.style.transform = 'translateX(-4px)'; }, 200);
+    setTimeout(function() { card.style.transform = 'translateX(4px)'; }, 300);
+    setTimeout(function() {
+        card.style.transform = 'translateY(0) scale(1)';
+        card.style.transition = 'all 0.55s cubic-bezier(0.4, 0, 0.2, 1)';
+    }, 400);
+}
+
+function wizUpdateSummary() {
+    var key = document.getElementById('wiz-apikey').value.trim();
+    document.getElementById('wiz-sum-key').textContent = key ? key.substring(0, 8) + '...' + key.substring(key.length - 4) : '(none)';
+    document.getElementById('wiz-sum-model').textContent = document.getElementById('wiz-model').value;
+    document.getElementById('wiz-sum-base').textContent = document.getElementById('wiz-api-base').value.trim() || 'https://api.deepseek.com';
+    document.getElementById('wiz-sum-root').textContent = document.getElementById('wiz-project-root').value.trim() || '(default)';
+    document.getElementById('wiz-sum-web-search').textContent = document.getElementById('wiz-web-search').checked ? 'On' : 'Off';
+    document.getElementById('wiz-sum-confirm-write').textContent = document.getElementById('wiz-confirm-write').checked ? 'On' : 'Off';
+    document.getElementById('wiz-sum-queue-size').textContent = document.getElementById('wiz-queue-size').value || '200';
+    document.getElementById('wiz-sum-max-steps').textContent = document.getElementById('wiz-max-steps').value || '128';
+    var timeout = parseInt(document.getElementById('wiz-task-timeout').value) || 0;
+    document.getElementById('wiz-sum-task-timeout').textContent = timeout > 0 ? timeout + 's' : '0s (disabled)';
+}
+
+async function wizFinish(skipped) {
+    if (!skipped) {
+        var apiKey = document.getElementById('wiz-apikey').value.trim();
+        var apiBase = document.getElementById('wiz-api-base').value.trim() || 'https://api.deepseek.com';
+        var model = document.getElementById('wiz-model').value;
+        var projectRoot = document.getElementById('wiz-project-root').value.trim();
+        var webSearch = document.getElementById('wiz-web-search').checked;
+        var confirmWrite = document.getElementById('wiz-confirm-write').checked;
+        var queueSize = parseInt(document.getElementById('wiz-queue-size').value) || 200;
+        var maxSteps = parseInt(document.getElementById('wiz-max-steps').value) || 128;
+        var taskTimeout = parseInt(document.getElementById('wiz-task-timeout').value) || 0;
+
+        var baseConfig = {
+            api_base: apiBase,
+            model: model,
+            project_root: projectRoot,
+            language: config.language || 'zh_Cn',
+            encryption_method: config.encryption_method || 'win32crypt',
+            queue_max_size: queueSize,
+            max_steps: maxSteps,
+            enable_web_search: webSearch,
+            confirm_write_delete: confirmWrite,
+            temperature: config.temperature || 1.0,
+            think_level: config.think_level || '高',
+            max_tokens: config.max_tokens || 32767,
+            task_timeout: taskTimeout,
+            memory: false,
+            memory_mode: 'full',
+            max_rounds: 10
+        };
+        try { await window.pywebview.api.save_config(baseConfig); } catch(e) {}
+        if (apiKey) {
+            try { await window.pywebview.api.set_api_key(apiKey); } catch(e) {}
+        }
+    }
+
+    var overlay = document.getElementById('wizard-overlay');
+    overlay.classList.add('fade-out');
+    stopWizParticles();
+
+    setTimeout(function() {
+        overlay.classList.remove('show', 'fade-out');
+        var canvas = document.getElementById('wiz-particles');
+        if (canvas) { var c = canvas.getContext('2d'); c.clearRect(0, 0, canvas.width, canvas.height); }
+        userInput.disabled = false;
+        userInput.focus();
+        if (!skipped) {
+            showToast('Welcome! Setup complete.');
+        } else {
+            showToast('You can configure your API key later in Settings.');
+        }
+    }, 650);
+}
+
+function showWizardOverlay() {
+    wizCurrentStep = 0;
+    wizKeyVerified = false;
+    wizKeyVerifying = false;
+    var cards = document.querySelectorAll('.wiz-card');
+    cards.forEach(function(card, i) {
+        card.classList.remove('active', 'leaving');
+        if (i === 0) card.classList.add('active');
+    });
+    wizUpdateStepIndicators();
+    document.getElementById('wiz-apikey').value = '';
+    document.getElementById('wiz-api-base').value = config.api_base || 'https://api.deepseek.com';
+    document.getElementById('wiz-project-root').value = config.project_root || '';
+    document.getElementById('wiz-web-search').checked = config.enable_web_search || false;
+    document.getElementById('wiz-confirm-write').checked = config.confirm_write_delete !== false;
+    document.getElementById('wiz-queue-size').value = config.queue_max_size || 200;
+    document.getElementById('wiz-max-steps').value = config.max_steps || 128;
+    document.getElementById('wiz-task-timeout').value = config.task_timeout || 0;
+    document.getElementById('wiz-key-status').textContent = '';
+    document.getElementById('wiz-key-status').className = 'wiz-status info';
+    document.getElementById('wiz-verify-key').textContent = '🔍 Verify Key';
+    document.getElementById('wiz-verify-key').disabled = false;
+    var overlay = document.getElementById('wizard-overlay');
+    overlay.classList.add('show');
+    overlay.classList.remove('fade-out');
+    startWizParticles();
+    document.getElementById('wiz-apikey').focus();
+}
+
+function bindWizardEvents() {
+    document.getElementById('wiz-skip-btn').addEventListener('click', function() {
+        document.getElementById('wiz-skip-dialog').classList.add('show');
+    });
+    document.getElementById('wiz-skip-cancel').addEventListener('click', function() {
+        document.getElementById('wiz-skip-dialog').classList.remove('show');
+    });
+    document.getElementById('wiz-skip-confirm').addEventListener('click', function() {
+        document.getElementById('wiz-skip-dialog').classList.remove('show');
+        wizFinish(true);
+    });
+    document.getElementById('wiz-skip-dialog').addEventListener('click', function(e) {
+        if (e.target === document.getElementById('wiz-skip-dialog')) {
+            document.getElementById('wiz-skip-dialog').classList.remove('show');
+        }
+    });
+
+    document.getElementById('wiz-step0-next').addEventListener('click', wizNextStep);
+
+    document.getElementById('wiz-step1-back').addEventListener('click', wizPrevStep);
+    document.getElementById('wiz-step1-next').addEventListener('click', wizNextStep);
+    document.getElementById('wiz-getkey').addEventListener('click', function() {
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.open_url) {
+            window.pywebview.api.open_url('https://platform.deepseek.com/');
+        } else {
+            window.open('https://platform.deepseek.com/', '_blank');
+        }
+    });
+    document.getElementById('wiz-verify-key').addEventListener('click', wizVerifyKey);
+    document.getElementById('wiz-apikey').addEventListener('input', function() {
+        if (wizKeyVerified) {
+            wizKeyVerified = false;
+            document.getElementById('wiz-key-status').textContent = 'Key changed — please verify again';
+            document.getElementById('wiz-key-status').className = 'wiz-status info';
+            document.getElementById('wiz-verify-key').textContent = '🔍 Verify Key';
+        }
+    });
+    document.getElementById('wiz-api-base').addEventListener('input', function() {
+        if (wizKeyVerified) {
+            wizKeyVerified = false;
+            document.getElementById('wiz-key-status').textContent = 'Base URL changed — please verify again';
+            document.getElementById('wiz-key-status').className = 'wiz-status info';
+            document.getElementById('wiz-verify-key').textContent = '🔍 Verify Key';
+        }
+    });
+    document.getElementById('wiz-apikey').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); wizNextStep(); }
+    });
+
+    document.getElementById('wiz-step2-back').addEventListener('click', wizPrevStep);
+    document.getElementById('wiz-step2-next').addEventListener('click', wizNextStep);
+    document.getElementById('wiz-browse').addEventListener('click', function() {
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.pick_directory) {
+            window.pywebview.api.pick_directory().then(function(path) {
+                if (path) document.getElementById('wiz-project-root').value = path;
+            });
+        } else {
+            var path = prompt('Enter project directory path:');
+            if (path) document.getElementById('wiz-project-root').value = path;
+        }
+    });
+
+    document.getElementById('wiz-step3-back').addEventListener('click', wizPrevStep);
+    document.getElementById('wiz-finish-btn').addEventListener('click', function() { wizFinish(false); });
+
+    document.addEventListener('keydown', function(e) {
+        var overlay = document.getElementById('wizard-overlay');
+        if (!overlay.classList.contains('show')) return;
+        var skipDlg = document.getElementById('wiz-skip-dialog');
+        if (skipDlg.classList.contains('show')) {
+            if (e.key === 'Escape') skipDlg.classList.remove('show');
+            return;
+        }
+        if (e.key === 'ArrowRight' || (e.key === 'Enter' && e.ctrlKey)) {
+            e.preventDefault(); wizNextStep();
+        }
+        if (e.key === 'ArrowLeft') {
+            e.preventDefault(); wizPrevStep();
+        }
+        if (e.key === 'Escape' && wizCurrentStep > 0) {
+            e.preventDefault(); wizPrevStep();
+        }
+    });
+}
+
+window.addEventListener('pywebviewready', async function() {
+    try {
+        config = await window.pywebview.api.get_config();
+        var isFirst = await window.pywebview.api.is_first_run();
+        if (isFirst) {
+            bindWizardEvents();
+            setTimeout(function() { showWizardOverlay(); }, 200);
+        } else {
+            var hasKey = await window.pywebview.api.has_api_key();
+            if (!hasKey) {
+                setTimeout(function() { showApiKeyModal(); }, 300);
+            }
+            await loadHistory();
+            userInput.disabled = false;
+            userInput.focus();
+        }
+    } catch(e) {
+        config = {};
+        userInput.disabled = false;
+        userInput.focus();
+    }
+});
+
+window.onerror = function(message, source, lineno, colno, error) {
+    var msg = 'JS Error: ' + message + ' at ' + source + ':' + lineno + ':' + colno;
+    try { window.pywebview.api.log_frontend_error(msg); } catch(e) {}
+    return true;
+};
+</script>
+</body>
+</html>
