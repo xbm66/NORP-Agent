@@ -13,13 +13,13 @@ from typing import Optional
 from config import ConfigManager
 from event_queue import EventQueue
 from loop import AgentLoop
+from plugin_system.manager import PluginManager
 
 import json
 
 
 
 def extract_text_from_file(file_path: str) -> str:
-    """从文件提取文本内容。支持 txt/py/json/csv/css/html/md/pdf/docx/xlsx。"""
     ext = Path(file_path).suffix.lower()
     if ext in ['.txt', '.py', '.json', '.csv', '.css', '.html', '.md', '.js',
                '.ts', '.tsx', '.jsx', '.yaml', '.yml', '.toml', '.xml',
@@ -81,6 +81,21 @@ class AgentAPI:
         self.memory_history: list = []     
         self.memory_summary: str = ""      
         self._load_memory()
+
+        # ── Plugin system ──
+        cfg = self.config_manager.load()
+        plugin_dirs = cfg.get("plugin_dirs", [])
+        self.plugin_manager = PluginManager(
+            plugin_dirs=plugin_dirs,
+            app_dir=app_dir,
+            project_root=cfg.get("project_root", ""),
+            config=cfg,  # pass full config for security settings
+        )
+        self.plugin_manager.update_config_snapshot(cfg)
+        if cfg.get("plugins_enabled", True):
+            self.plugin_manager.discover_and_load()
+        else:
+            self.plugin_manager.set_plugin_dirs([])
 
         self._ensure_project_root()
 
@@ -196,6 +211,19 @@ class AgentAPI:
         if not model or not model.strip() or model.strip() in (".", ""):
             model = "deepseek-v4-pro"
 
+        # Update plugin manager config
+        self.plugin_manager.update_config_snapshot(cfg)
+        self.plugin_manager.update_security_config(cfg)
+
+        # Reload plugins if dirs or enabled state changed
+        if cfg.get("plugins_enabled", True):
+            current_dirs = set(self.plugin_manager.plugin_dirs)
+            new_dirs = set(cfg.get("plugin_dirs", []))
+            if current_dirs != new_dirs:
+                self.plugin_manager.set_plugin_dirs(cfg.get("plugin_dirs", []))
+        else:
+            self.plugin_manager.set_plugin_dirs([])
+
         self.loop = AgentLoop(
             api_key=api_key,
             project_root=cfg.get("project_root", ""),
@@ -210,6 +238,8 @@ class AgentAPI:
             think_level=cfg.get("think_level", "高"),
             max_tokens=cfg.get("max_tokens", 32767),
             task_timeout=cfg.get("task_timeout", 0),
+            plugin_manager=self.plugin_manager,
+            use_responses_api=cfg.get("use_responses_api", True),
         )
 
     def send_message(self, text: str) -> str:
@@ -451,3 +481,89 @@ class AgentAPI:
         if not self.loop:
             return {}
         return self.loop.get_total_usage()
+
+    # Plugin Management API
+
+    def get_plugins(self) -> list:
+        """返回所有已发现插件的元数据列表。"""
+        return self.plugin_manager.get_all_plugins()
+
+    def get_plugin_dirs(self) -> list:
+        """返回当前配置的插件目录列表。"""
+        return self.plugin_manager.plugin_dirs
+
+    def add_plugin_dir(self, path: str) -> str:
+        """添加一个插件目录并重新扫描。"""
+        cfg = self.config_manager.load()
+        dirs = cfg.get("plugin_dirs", [])
+        if path not in dirs:
+            dirs.append(path)
+            cfg["plugin_dirs"] = dirs
+            self.config_manager.save(cfg)
+            self.plugin_manager.set_plugin_dirs(dirs)
+        return "ok"
+
+    def remove_plugin_dir(self, path: str) -> str:
+        """移除一个插件目录并重新扫描。"""
+        cfg = self.config_manager.load()
+        dirs = cfg.get("plugin_dirs", [])
+        if path in dirs:
+            dirs.remove(path)
+            cfg["plugin_dirs"] = dirs
+            self.config_manager.save(cfg)
+            self.plugin_manager.set_plugin_dirs(dirs)
+        return "ok"
+
+    def reload_plugins(self) -> str:
+        """重新扫描所有插件目录。"""
+        cfg = self.config_manager.load()
+        dirs = cfg.get("plugin_dirs", [])
+        self.plugin_manager.set_plugin_dirs(dirs)
+        return "ok"
+
+    def pick_plugin_dir(self) -> str:
+        """打开文件夹选择对话框，返回选中路径（用于选择插件目录）。"""
+        import webview
+        try:
+            result = webview.windows[0].create_file_dialog(
+                webview.FileDialog.FOLDER,
+                directory=self.config_manager.load().get("project_root", "")
+            )
+            if result and len(result) > 0:
+                return result[0]
+            return ""
+        except Exception:
+            return ""
+
+    # Plugin Security API 
+
+    def get_plugin_audit_results(self) -> dict:
+        """返回所有插件的安全审计结果。"""
+        return self.plugin_manager.get_audit_results()
+
+    def get_plugin_security_config(self) -> dict:
+        """返回当前插件安全配置。"""
+        cfg = self.config_manager.load()
+        return {
+            "audit": cfg.get("plugin_security_audit", "warn"),
+            "import_restrict": cfg.get("plugin_security_import_restrict", "off"),
+            "require_permissions": cfg.get("plugin_security_require_permissions", False),
+            "resource_limit": cfg.get("plugin_security_resource_limit", False),
+        }
+
+    def set_plugin_security_config(self, audit: str = "warn",
+                                   import_restrict: str = "off",
+                                   require_permissions: bool = False,
+                                   resource_limit: bool = False) -> str:
+        """更新插件安全配置并保存，触发插件重新加载。"""
+        cfg = self.config_manager.load()
+        cfg["plugin_security_audit"] = audit
+        cfg["plugin_security_import_restrict"] = import_restrict
+        cfg["plugin_security_require_permissions"] = require_permissions
+        cfg["plugin_security_resource_limit"] = resource_limit
+        self.config_manager.save(cfg)
+
+        # Update the plugin manager's security module and reload
+        self.plugin_manager.update_security_config(cfg)
+        self.plugin_manager.set_plugin_dirs(cfg.get("plugin_dirs", []))
+        return "ok"

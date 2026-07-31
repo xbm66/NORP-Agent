@@ -25,23 +25,34 @@ class ConfigManager:
         self.key_path = os.path.join(app_dir, "base.env")
         Path(app_dir).mkdir(parents=True, exist_ok=True)
         self.defaults = {
-            "language": "zh_Cn",
+            "language": "zh_CN",
             "model": "deepseek-v4-pro",
+            "use_responses_api": True,
             "encryption_method": "win32crypt",
             "api_base": "https://api.deepseek.com",
             "project_root": os.path.join(os.path.expanduser("~"), "vibe_workspace"),
             "queue_max_size": 2000,
             "max_steps": 128,
             "enable_web_search": False,
-            "confirm_write_delete": True,  
+            "confirm_write_delete": True,
             "temperature": 1.0,
             "think_level": "高",
             "max_tokens": 32767,
-            "task_timeout": 0,             
-          
-            "memory": False,               
-            "memory_mode": "full",        
-            "max_rounds": 10,              
+            "task_timeout": 0,
+
+            "memory": False,
+            "memory_mode": "full",
+            "max_rounds": 10,
+
+            # Plugin system
+            "plugins_enabled": True,
+            "plugin_dirs": [],
+
+            # Plugin security
+            "plugin_security_audit": "warn",
+            "plugin_security_import_restrict": "off",
+            "plugin_security_require_permissions": False,
+            "plugin_security_resource_limit": False,
         }
 
     def load(self) -> Dict[str, Any]:

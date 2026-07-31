@@ -1,7 +1,7 @@
 # Vibe Coding Agent - 工具定义
 # Copyright (c) 2026 xingluosama
 
-TOOLS = [
+BUILTIN_TOOLS = [
     {
         "type": "function",
         "function": {

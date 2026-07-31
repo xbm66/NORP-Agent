@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""
-事件队列模块 - Vibe Coding Agent
-线程安全的生产者-消费者队列，用于 Agent Loop 与前端之间的通信。
-支持软上限和智能丢弃策略。
+#事件队列模块 - Vibe Coding Agent
+#线程安全的生产者-消费者队列，用于 Agent Loop 与前端之间的通信。
+#支持软上限和智能丢弃策略。
 
-Copyright (c) 2026 xingluosama
-"""
+#Copyright (c) 2026 xingluosama
+
 
 import threading
 from collections import deque
@@ -17,29 +16,12 @@ class EventQueue:
     线程安全的事件队列。
 
     特性：
-    - 生产者（Agent Loop）调用 put() 放入事件
-    - 消费者（前端轮询）调用 get() 取走事件
-    - 队列超过 max_size 时自动丢弃最老的 T: 事件
-    - get() 在没有事件时返回 "WAIT"，流结束时返回 None
+    生产者（Agent Loop）调用 put() 放入事件
+    消费者（前端轮询）调用 get() 取走事件
+    队列超过 max_size 时自动丢弃最老的 T: 事件
+    get() 在没有事件时返回 "WAIT"，流结束时返回 None
 
-    使用示例：
-
-        q = EventQueue(max_size=200)
-
-        # 生产者线程
-        q.put("T:这是推理内容")
-        q.put("R:这是回复内容")
-        q.signal_finish()  # 标记流结束
-
-        # 消费者线程（或前端轮询）
-        while True:
-            event = q.get(timeout=0.05)
-            if event is None:
-                break  # 流结束
-            if event == "WAIT":
-                continue  # 暂无事件
-            handle(event)  # 处理 T:/R:/E:/Q:/D: 事件
-    """
+   """
 
     def __init__(self, max_size: int = 2000):
         """

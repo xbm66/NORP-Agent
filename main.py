@@ -13,7 +13,13 @@ LOCALAPPDATA = os.environ.get("LOCALAPPDATA", os.getcwd())
 APP_DIR = os.path.join(LOCALAPPDATA, "vibe_agent")
 Path(APP_DIR).mkdir(parents=True, exist_ok=True)
 
-FRONTEND_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "front.html")
+# PyInstaller 兼容：打包后资源在 sys._MEIPASS 中
+if getattr(sys, 'frozen', False):
+    _BASE_DIR = sys._MEIPASS
+else:
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+FRONTEND_PATH = os.path.join(_BASE_DIR, "front.html")
 
 
 def load_frontend_html():
@@ -60,6 +66,19 @@ def main():
         window.expose(api.get_initial_messages)
         window.expose(api.get_memory_content)
         window.expose(api.clear_memory)
+
+        # ── Plugin management ──
+        window.expose(api.get_plugins)
+        window.expose(api.get_plugin_dirs)
+        window.expose(api.add_plugin_dir)
+        window.expose(api.remove_plugin_dir)
+        window.expose(api.reload_plugins)
+        window.expose(api.pick_plugin_dir)
+
+        # ── Plugin security ──
+        window.expose(api.get_plugin_audit_results)
+        window.expose(api.get_plugin_security_config)
+        window.expose(api.set_plugin_security_config)
 
         webview.start()
     except Exception:

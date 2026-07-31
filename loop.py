@@ -14,7 +14,8 @@ from anthropic import Anthropic as AnthropicClient
 
 from event_queue import EventQueue
 from executor import ToolExecutor
-from tools import TOOLS
+from tools import BUILTIN_TOOLS
+from plugin_system.manager import PluginManager
 
 CHARS_PER_TOKEN = 3
 
@@ -43,8 +44,11 @@ class AgentLoop:
         think_level: str = "高",
         max_tokens: int = 32767,
         task_timeout: int = 0,
+        plugin_manager: Optional[PluginManager] = None,
+        use_responses_api: bool = True,
     ):
         self.api_key = api_key
+        self.use_responses_api = use_responses_api
         self.base_url = base_url
         self.project_root = project_root
         self.app_dir = app_dir
@@ -81,9 +85,25 @@ class AgentLoop:
             self.tool_log_path = ""
 
         
+        self._is_deepseek_official = (
+            base_url.rstrip('/') == "https://api.deepseek.com"
+        )
+
+        # ── Responses API 原生支持（DeepSeek V4 Flash 正式版）──
+        # 设置开关 use_responses_api 默认开启：
+        # - 仅官方端点 + flash 模型时启用（Responses API 目前仅支持 V4 Flash）
+        # - 非 flash 模型 / 自定义端点自动回退 Chat Completions
+        self._use_responses_api = (
+            use_responses_api
+            and self._is_deepseek_official
+            and "flash" in model
+        )
+
+        # Anthropic 兼容搜索模式仅在未启用 Responses API 时使用
         self._use_anthropic_search = (
             enable_web_search
             and base_url in ("https://api.deepseek.com", "https://api.deepseek.com/")
+            and not self._use_responses_api
         )
 
         self.client = OpenAI(api_key=api_key, base_url=base_url)
@@ -110,9 +130,23 @@ class AgentLoop:
         self._user_reply_event = threading.Event()
         self._user_reply_value = ""
 
-        self._is_deepseek_official = (
-            base_url.rstrip('/') == "https://api.deepseek.com"
-        )
+        # ── Plugin system ──
+        self.plugin_manager = plugin_manager or PluginManager(
+            [], app_dir, project_root, config={})
+        self.plugin_manager.update_config_snapshot({
+            "project_root": project_root,
+            "app_dir": app_dir,
+            "model": model,
+            "base_url": base_url,
+            "max_steps": max_steps,
+            "enable_web_search": enable_web_search,
+            "confirm_write_delete": confirm_write_delete,
+            "temperature": temperature,
+            "think_level": think_level,
+            "max_tokens": max_tokens,
+            "task_timeout": task_timeout,
+        })
+        self.plugin_manager.fire_agent_init()
 
 
     def _get_elapsed(self) -> float:
@@ -142,16 +176,20 @@ class AgentLoop:
 
 
     def _build_tools_openai(self) -> list:
-        """构建 OpenAI 格式工具列表。"""
-        if self.enable_web_search:
-            return TOOLS  
-        else:
-            return [t for t in TOOLS if t["function"]["name"] != "web_search"]
+        """构建 OpenAI 格式工具列表（内置 + 插件）。"""
+        tools = list(BUILTIN_TOOLS)  # copy
+
+        if self.plugin_manager:
+            plugin_tools = self.plugin_manager.get_tools()
+            tools.extend(plugin_tools)
+
+        if not self.enable_web_search:
+            tools = [t for t in tools if t["function"]["name"] != "web_search"]
+
+        return tools
 
     def _build_tools_anthropic(self) -> list:
-        """构建 Anthropic 格式工具列表。
-        包含：Anthropic 原生 web_search 工具 + 自定义工具（转为 Anthropic 格式）。
-        """
+        """构建 Anthropic 格式工具列表（内置 + 插件）。"""
         tools = []
 
         tools.append({
@@ -159,7 +197,7 @@ class AgentLoop:
             "name": "web_search"
         })
 
-        for t in TOOLS:
+        for t in BUILTIN_TOOLS:
             name = t["function"]["name"]
             if name == "web_search":
                 continue
@@ -169,6 +207,16 @@ class AgentLoop:
                 "description": func.get("description", ""),
                 "input_schema": func.get("parameters", {"type": "object", "properties": {}})
             })
+
+        # Add plugin tools in Anthropic format
+        if self.plugin_manager:
+            for t in self.plugin_manager.get_tools():
+                func = t["function"]
+                tools.append({
+                    "name": func["name"],
+                    "description": func.get("description", ""),
+                    "input_schema": func.get("parameters", {"type": "object", "properties": {}})
+                })
 
         return tools
 
@@ -218,6 +266,8 @@ class AgentLoop:
                         msg["reasoning_content"] = m["reasoning_content"]
                     if m.get("tool_calls"):
                         msg["tool_calls"] = m["tool_calls"]
+                    if m.get("web_search_calls"):
+                        msg["web_search_calls"] = m["web_search_calls"]
                     full_messages.append(msg)
                 elif role == "tool":
                     full_messages.append({
@@ -306,6 +356,8 @@ class AgentLoop:
     def stop(self):
         self._stop_event.set()
         self._user_reply_event.set()
+        if self.plugin_manager:
+            self.plugin_manager.fire_agent_shutdown()
         if self._sandbox:
             self._sandbox.stop()
 
@@ -380,6 +432,18 @@ class AgentLoop:
             "tool_call_tokens": self._total_usage["tool_call_tokens"]
         }, ensure_ascii=False)
         self.event_queue.put(f"U:{usage_event}")
+        if self.plugin_manager:
+            self.plugin_manager.fire_usage_update(self._total_usage.copy())
+
+    def _execute_tool(self, tool_name: str, tool_args: dict) -> str:
+        """Execute a tool, routing to plugin or built-in executor."""
+        # Check if it's a plugin tool first
+        if self.plugin_manager:
+            plugin_tools = self.plugin_manager.get_tools()
+            plugin_names = {t["function"]["name"] for t in plugin_tools}
+            if tool_name in plugin_names:
+                return self.plugin_manager.execute(tool_name, tool_args)
+        return self.executor.execute(tool_name, tool_args)
 
 
     def _log_tool_call(self, step: int, tool_name: str, args: dict, result: str):
@@ -435,10 +499,22 @@ class AgentLoop:
         self._total_pause_duration = 0.0
         self._pause_start_time = 0.0
 
-        if self._use_anthropic_search:
-            result = self._run_anthropic(user_message, history)
-        else:
-            result = self._run_openai(user_message, history)
+        # ── Hook: task started ──
+        if self.plugin_manager:
+            self.plugin_manager.fire_task_start(user_message)
+
+        try:
+            if self._use_responses_api:
+                # DeepSeek V4 Flash 原生 Responses API
+                result = self._run_responses(user_message, history)
+            elif self._use_anthropic_search:
+                result = self._run_anthropic(user_message, history)
+            else:
+                result = self._run_openai(user_message, history)
+        except Exception as e:
+            if self.plugin_manager:
+                self.plugin_manager.fire_task_error(str(e))
+            raise
 
         conv = []
         for m in self._messages[2:]:  
@@ -449,6 +525,8 @@ class AgentLoop:
                     msg["reasoning_content"] = m["reasoning_content"]
                 if m.get("tool_calls"):
                     msg["tool_calls"] = m["tool_calls"]
+                if m.get("web_search_calls"):
+                    msg["web_search_calls"] = m["web_search_calls"]
                 conv.append(msg)
             elif role == "tool":
                 conv.append({
@@ -457,6 +535,19 @@ class AgentLoop:
                     "content": m.get("content", "")
                 })
         self._conversation_history = conv
+
+        # ── Hook: task done / stopped / timeout ──
+        if self.plugin_manager:
+            if result == "stopped":
+                self.plugin_manager.fire_task_stopped()
+            elif result == "timeout":
+                self.plugin_manager.fire_task_timeout(self._get_elapsed())
+            elif result == "max_steps":
+                pass  # neither done nor error
+            else:
+                self.plugin_manager.fire_task_done(
+                    summary=result[:200] if result else "",
+                    final_reply=result or "")
 
         return result
 
@@ -496,6 +587,11 @@ class AgentLoop:
 
             self._step_count = step + 1
 
+            # ── Hook: before_step ──
+            if self.plugin_manager:
+                messages = self.plugin_manager.fire_before_step(
+                    self._step_count, messages)
+
             api_params = {
                 "model": self.model,
                 "messages": messages,
@@ -519,7 +615,12 @@ class AgentLoop:
             reasoning_parts = []
             content_parts = []
             tool_calls_accum = {}
-            stream_usage = None  
+            stream_usage = None
+
+            # Throttle counters for streaming hooks (every ~100ms)
+            _last_ts_fire = 0.0
+            _reasoning_buf = ""
+            _content_buf = ""
 
             for chunk in stream:
                 if self._stop_event.is_set():
@@ -552,9 +653,29 @@ class AgentLoop:
                 if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
                     reasoning_parts.append(delta.reasoning_content)
                     self.event_queue.put(f"T:{delta.reasoning_content}")
+                    _reasoning_buf += delta.reasoning_content
                 if hasattr(delta, 'content') and delta.content:
                     content_parts.append(delta.content)
                     self.event_queue.put(f"R:{delta.content}")
+                    _content_buf += delta.content
+
+                # Throttled streaming hooks
+                now = time.time()
+                if self.plugin_manager and now - _last_ts_fire > 0.1:
+                    if _reasoning_buf:
+                        self.plugin_manager.fire_reasoning(_reasoning_buf)
+                        _reasoning_buf = ""
+                    if _content_buf:
+                        self.plugin_manager.fire_content(_content_buf)
+                        _content_buf = ""
+                    _last_ts_fire = now
+
+            # Flush remaining streaming tokens
+            if self.plugin_manager:
+                if _reasoning_buf:
+                    self.plugin_manager.fire_reasoning(_reasoning_buf)
+                if _content_buf:
+                    self.plugin_manager.fire_content(_content_buf)
 
             if self._stop_event.is_set():
                 self.event_queue.put("E:Task stopped by user")
@@ -573,6 +694,12 @@ class AgentLoop:
 
             full_reasoning = "".join(reasoning_parts)
             full_content = "".join(content_parts)
+
+            # ── Hook: after_step ──
+            if self.plugin_manager:
+                self.plugin_manager.fire_after_step(
+                    self._step_count, full_reasoning, full_content,
+                    tool_calls_accum)
 
             assistant_msg = {"role": "assistant", "content": full_content}
 
@@ -610,46 +737,402 @@ class AgentLoop:
                 self.event_queue.signal_finish()
                 return full_content
 
-            for tc in tool_calls_list:
-                tool_name = tc["function"]["name"]
-                tool_args = json.loads(tc["function"]["arguments"])
+            status = self._process_tool_calls_openai(messages, tool_calls_list, step)
+            if status == "stopped":
+                return "stopped"
 
-                if tool_name == "ask_user":
-                    question = tool_args.get("question", "")
-                    self.event_queue.put(f"Q:{json.dumps(question, ensure_ascii=False)}")
-                    reply = self._wait_for_user_input()
-                    if self._stop_event.is_set():
-                        self.event_queue.put("E:Task stopped by user")
-                        self.event_queue.signal_finish()
-                        return "stopped"
-                    messages.append({"role": "user", "content": reply})
-                    self._log_tool_call(step + 1, tool_name, tool_args, f"user replied: {reply[:200]}")
-                    self._add_tool_tokens(tool_name, reply)
-                else:
-                    if (tool_name in ("write_file", "delete_file", "replace_in_file")
-                            and self.confirm_write_delete):
-                        if not self._confirm_write_delete(tool_name, tool_args):
-                            if self._stop_event.is_set():
-                                self.event_queue.put("E:Task stopped by user")
-                                self.event_queue.signal_finish()
-                                return "stopped"
-                            cancel_msg = "User cancelled the operation."
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc["id"],
-                                "content": cancel_msg
-                            })
-                            self._log_tool_call(step + 1, tool_name, tool_args, cancel_msg)
-                            continue
+        self.event_queue.put("E:Max steps reached, task incomplete")
+        self.event_queue.signal_finish()
+        return "max_steps"
 
-                    result = self.executor.execute(tool_name, tool_args)
+
+    def _process_tool_calls_openai(self, messages: list, tool_calls_list: list,
+                                   step: int) -> Optional[str]:
+        """执行 OpenAI 格式的 tool_calls 并把结果回传到 messages。
+
+        Chat Completions 与 Responses API 两条路径共用：
+        - 插件钩子（before/after_tool_call、user_input_required）
+        - ask_user 交互（等待用户输入）
+        - 写/删文件确认
+        - 工具执行、日志记录、token 估算
+        返回 "stopped" 表示用户停止任务，None 表示正常完成。
+        """
+        for tc in tool_calls_list:
+            tool_name = tc["function"]["name"]
+            tool_args = json.loads(tc["function"]["arguments"])
+
+            # ── Hook: before_tool_call ──
+            if self.plugin_manager:
+                modified_args = self.plugin_manager.fire_before_tool_call(
+                    tool_name, tool_args)
+                if modified_args is None:
+                    # Blocked by plugin
+                    blocked_msg = "Tool call blocked by plugin."
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
-                        "content": result
+                        "content": blocked_msg
                     })
-                    self._log_tool_call(step + 1, tool_name, tool_args, result)
-                    self._add_tool_tokens(tool_name, result)
+                    self._log_tool_call(step + 1, tool_name, tool_args, blocked_msg)
+                    continue
+                tool_args = modified_args
+
+            if tool_name == "ask_user":
+                question = tool_args.get("question", "")
+                # ── Hook: user_input_required ──
+                if self.plugin_manager:
+                    self.plugin_manager.fire_user_input_required(question)
+                self.event_queue.put(f"Q:{json.dumps(question, ensure_ascii=False)}")
+                reply = self._wait_for_user_input()
+                if self._stop_event.is_set():
+                    self.event_queue.put("E:Task stopped by user")
+                    self.event_queue.signal_finish()
+                    return "stopped"
+                messages.append({"role": "user", "content": reply})
+                self._log_tool_call(step + 1, tool_name, tool_args, f"user replied: {reply[:200]}")
+                self._add_tool_tokens(tool_name, reply)
+            else:
+                if (tool_name in ("write_file", "delete_file", "replace_in_file")
+                        and self.confirm_write_delete):
+                    if not self._confirm_write_delete(tool_name, tool_args):
+                        if self._stop_event.is_set():
+                            self.event_queue.put("E:Task stopped by user")
+                            self.event_queue.signal_finish()
+                            return "stopped"
+                        cancel_msg = "User cancelled the operation."
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": cancel_msg
+                        })
+                        self._log_tool_call(step + 1, tool_name, tool_args, cancel_msg)
+                        continue
+
+                result = self._execute_tool(tool_name, tool_args)
+
+                # ── Hook: after_tool_call ──
+                if self.plugin_manager:
+                    result = self.plugin_manager.fire_after_tool_call(
+                        tool_name, tool_args, result)
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result
+                })
+                self._log_tool_call(step + 1, tool_name, tool_args, result)
+                self._add_tool_tokens(tool_name, result)
+
+        return None
+
+
+    def _build_responses_tools(self) -> list:
+        """构建 Responses API 工具列表。
+
+        Responses API 工具格式要求 name/description/parameters 在顶层，
+        而不是嵌套在 function 字段里（那是 Chat Completions 的格式）。
+        web_search 使用服务端原生工具（Responses API 原生能力，客户端无需执行）。
+        """
+        # 先用 Chat Completions 格式拿到工具列表
+        cc_tools = self._build_tools_openai()
+
+        # 转换为 Responses API 格式：把 function 字段展平到顶层
+        tools = []
+        for t in cc_tools:
+            func = t.get("function", {})
+            name = func.get("name", "")
+            if self.enable_web_search and name == "web_search":
+                continue  # web_search 用原生格式代替
+            tools.append({
+                "type": "function",
+                "name": name,
+                "description": func.get("description", ""),
+                "parameters": func.get("parameters", {"type": "object", "properties": {}}),
+            })
+
+        if self.enable_web_search:
+            tools.append({"type": "web_search"})
+
+        return tools
+
+
+    def _build_responses_input(self, messages: list) -> list:
+        """将 OpenAI 格式 messages 转换为 Responses API 的 input items。
+
+        DeepSeek V4 Flash Responses API 输入格式：
+        - system/user 消息 → {"type": "message", "role": ..., "content": [{"type": "input_text", ...}]}
+        - assistant 推理   → {"type": "reasoning", "content": [{"type": "reasoning_text", ...}]}
+        - assistant 回复   → {"type": "message", "role": "assistant", "content": [{"type": "output_text", ...}]}
+        - 工具调用         → {"type": "function_call", "call_id", "name", "arguments"}
+        - 工具结果         → {"type": "function_call_output", "call_id", "output"}
+        - 服务端搜索       → {"type": "web_search_call", "id", "status", "query"}
+        """
+        items = []
+        for m in messages:
+            role = m.get("role", "")
+            if role == "system":
+                items.append({
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": m.get("content", "")}]
+                })
+            elif role == "user":
+                items.append({
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": m.get("content", "")}]
+                })
+            elif role == "assistant":
+                reasoning = m.get("reasoning_content", "")
+                if reasoning:
+                    items.append({
+                        "type": "reasoning",
+                        "content": [{"type": "reasoning_text", "text": reasoning}]
+                    })
+                text = m.get("content", "")
+                if text:
+                    items.append({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": text}]
+                    })
+                # 服务端原生 web_search 调用上下文
+                for wc in m.get("web_search_calls", []):
+                    items.append({
+                        "type": "web_search_call",
+                        "id": wc.get("id", ""),
+                        "status": wc.get("status", "completed"),
+                        "query": wc.get("query", "")
+                    })
+                for tc in m.get("tool_calls", []):
+                    items.append({
+                        "type": "function_call",
+                        "call_id": tc.get("id", ""),
+                        "name": tc["function"]["name"],
+                        "arguments": tc["function"]["arguments"]
+                    })
+            elif role == "tool":
+                items.append({
+                    "type": "function_call_output",
+                    "call_id": m.get("tool_call_id", ""),
+                    "output": m.get("content", "")
+                })
+        return items
+
+
+    def _run_responses(self, user_message: str, history: Optional[List[Dict]] = None) -> str:
+        """使用 OpenAI SDK 的 Responses API 原生调用 DeepSeek V4 Flash。
+
+        DeepSeek V4 Flash 正式版原生支持 Responses API：
+        1. 语义化流式事件：response.reasoning_text.delta / response.output_text.delta
+           / response.function_call_arguments.delta / response.output_item.done
+           / response.completed（携带 usage）
+        2. 推理控制使用顶层 reasoning={"effort": ...} 参数（取代 extra_body.thinking）
+        3. web_search 为服务端原生工具（开启联网搜索时自动启用，客户端无需执行）
+        4. 无状态 API：每次请求必须携带完整上下文（input items）
+        5. 不回传历史：每次请求仅携带当前用户消息和系统提示，不附带会话历史
+        """
+        self._stop_event.clear()
+        self.event_queue.reset()
+
+        memory_content = getattr(self, '_memory_content', '')
+        # 不回传历史：history 参数被忽略，确保 Responses API 每次调用都是独立的
+        messages = self._build_full_messages(user_message, None, memory_content=memory_content)
+        self._messages = messages
+
+        # 工具列表：Responses API 模式下 web_search 使用服务端原生工具
+        tools = self._build_responses_tools()
+
+        reasoning_effort = self._get_reasoning_effort()
+
+        for step in range(self.max_steps):
+            if self._stop_event.is_set():
+                self.event_queue.put("E:Task stopped by user")
+                self.event_queue.signal_finish()
+                return "stopped"
+
+            if self._check_timeout():
+                elapsed = int(self._get_elapsed())
+                self.event_queue.put(f"E:Task timeout after {elapsed}s (limit: {self.task_timeout}s)")
+                self.event_queue.signal_finish()
+                return "timeout"
+
+            self._step_count = step + 1
+
+            # ── Hook: before_step ──
+            if self.plugin_manager:
+                messages = self.plugin_manager.fire_before_step(
+                    self._step_count, messages)
+
+            input_items = self._build_responses_input(messages)
+
+            api_params = {
+                "model": self.model,
+                "input": input_items,
+                "tools": tools,
+                "stream": True,
+                "max_output_tokens": self.max_tokens,
+            }
+            if self.think_level == "关":
+                api_params["temperature"] = self.temperature
+            elif reasoning_effort is not None:
+                api_params["reasoning"] = {"effort": reasoning_effort}
+
+            stream = self.client.responses.create(**api_params)
+
+            reasoning_parts = []
+            content_parts = []
+            tool_calls_accum = {}   # item_id -> {call_id, name, arguments}
+            web_search_calls = []   # 服务端原生 web_search 调用记录
+            stream_usage = None
+
+            # Throttle counters for streaming hooks (every ~100ms)
+            _last_ts_fire = 0.0
+            _reasoning_buf = ""
+            _content_buf = ""
+
+            for event in stream:
+                if self._stop_event.is_set():
+                    break
+
+                et = event.type
+
+                if et == "response.reasoning_text.delta":
+                    delta = getattr(event, "delta", "") or ""
+                    reasoning_parts.append(delta)
+                    self.event_queue.put(f"T:{delta}")
+                    _reasoning_buf += delta
+                elif et == "response.output_text.delta":
+                    delta = getattr(event, "delta", "") or ""
+                    content_parts.append(delta)
+                    self.event_queue.put(f"R:{delta}")
+                    _content_buf += delta
+                elif et == "response.function_call_arguments.delta":
+                    item_id = getattr(event, "item_id", "") or ""
+                    delta = getattr(event, "delta", "") or ""
+                    acc = tool_calls_accum.setdefault(
+                        item_id, {"call_id": "", "name": "", "arguments": ""})
+                    acc["arguments"] += delta
+                elif et == "response.output_item.done":
+                    item = getattr(event, "item", None)
+                    if item is not None and getattr(item, "type", "") == "function_call":
+                        item_id = getattr(item, "id", "") or ""
+                        acc = tool_calls_accum.setdefault(
+                            item_id, {"call_id": "", "name": "", "arguments": ""})
+                        acc["call_id"] = getattr(item, "call_id", "") or acc["call_id"]
+                        acc["name"] = getattr(item, "name", "") or acc["name"]
+                        if getattr(item, "arguments", None):
+                            acc["arguments"] = item.arguments
+                    elif item is not None and getattr(item, "type", "") == "web_search_call":
+                        web_search_calls.append(item)
+                elif et == "response.completed":
+                    resp = getattr(event, "response", None)
+                    if resp is not None and getattr(resp, "usage", None):
+                        u = resp.usage
+                        stream_usage = {
+                            "input_tokens": getattr(u, "input_tokens", 0) or 0,
+                            "output_tokens": getattr(u, "output_tokens", 0) or 0
+                        }
+
+                # Throttled streaming hooks
+                now = time.time()
+                if self.plugin_manager and now - _last_ts_fire > 0.1:
+                    if _reasoning_buf:
+                        self.plugin_manager.fire_reasoning(_reasoning_buf)
+                        _reasoning_buf = ""
+                    if _content_buf:
+                        self.plugin_manager.fire_content(_content_buf)
+                        _content_buf = ""
+                    _last_ts_fire = now
+
+            # Flush remaining streaming tokens
+            if self.plugin_manager:
+                if _reasoning_buf:
+                    self.plugin_manager.fire_reasoning(_reasoning_buf)
+                if _content_buf:
+                    self.plugin_manager.fire_content(_content_buf)
+
+            if self._stop_event.is_set():
+                self.event_queue.put("E:Task stopped by user")
+                self.event_queue.signal_finish()
+                return "stopped"
+
+            if stream_usage:
+                self._update_usage(
+                    stream_usage["input_tokens"],
+                    stream_usage["output_tokens"]
+                )
+            else:
+                estimated_input = sum(len(str(m.get("content", ""))) for m in messages) // 4
+                estimated_output = len("".join(content_parts)) // 4
+                self._update_usage(estimated_input, estimated_output)
+
+            full_reasoning = "".join(reasoning_parts)
+            full_content = "".join(content_parts)
+
+            # ── Hook: after_step ──
+            if self.plugin_manager:
+                self.plugin_manager.fire_after_step(
+                    self._step_count, full_reasoning, full_content,
+                    tool_calls_accum)
+
+            assistant_msg = {"role": "assistant", "content": full_content}
+
+            if full_reasoning:
+                assistant_msg["reasoning_content"] = full_reasoning
+
+            tool_calls_list = []
+            for item_id in sorted(tool_calls_accum.keys()):
+                acc = tool_calls_accum[item_id]
+                if acc["call_id"] and acc["name"]:
+                    tool_calls_list.append({
+                        "id": acc["call_id"],
+                        "type": "function",
+                        "function": {
+                            "name": acc["name"],
+                            "arguments": acc["arguments"]
+                        }
+                    })
+
+            # 服务端原生 web_search 调用：记录到前端日志，并回传上下文
+            for wc in web_search_calls:
+                query = getattr(wc, "query", "") or ""
+                cmd_info = json.dumps({
+                    "tool": "web_search (native Responses API)",
+                    "args": {"query": query}
+                }, ensure_ascii=False)
+                self.event_queue.put(f"C:{cmd_info}")
+            if web_search_calls:
+                assistant_msg["web_search_calls"] = [
+                    {
+                        "id": getattr(wc, "id", "") or "",
+                        "status": getattr(wc, "status", "completed") or "completed",
+                        "query": getattr(wc, "query", "") or ""
+                    }
+                    for wc in web_search_calls
+                ]
+
+            if tool_calls_list:
+                assistant_msg["tool_calls"] = tool_calls_list
+                for tc in tool_calls_list:
+                    cmd_info = json.dumps({
+                        "tool": tc["function"]["name"],
+                        "args": json.loads(tc["function"]["arguments"])
+                    }, ensure_ascii=False)
+                    self.event_queue.put(f"C:{cmd_info}")
+
+            messages.append(assistant_msg)
+
+            if not tool_calls_list:
+                if full_content:
+                    self.event_queue.put(f"D:{full_content}")
+
+                self.event_queue.signal_finish()
+                return full_content
+
+            status = self._process_tool_calls_openai(messages, tool_calls_list, step)
+            if status == "stopped":
+                return "stopped"
 
         self.event_queue.put("E:Max steps reached, task incomplete")
         self.event_queue.signal_finish()
@@ -696,6 +1179,10 @@ class AgentLoop:
 
             self._step_count = step + 1
 
+            # ── Hook: before_step ──
+            if self.plugin_manager:
+                self.plugin_manager.fire_before_step(self._step_count, anthropic_messages)
+
             result = self._call_anthropic_stream(
                 messages=anthropic_messages,
                 system_prompt=system_prompt,
@@ -724,6 +1211,12 @@ class AgentLoop:
                 estimated_input = sum(len(str(m.get("content", ""))) for m in anthropic_messages) // 4
                 estimated_output = len(full_content) // 4
                 self._update_usage(estimated_input, estimated_output)
+
+            # ── Hook: after_step ──
+            if self.plugin_manager:
+                self.plugin_manager.fire_after_step(
+                    self._step_count, full_reasoning, full_content,
+                    tool_uses)
 
             if not tool_uses:
                 if full_content:
@@ -759,8 +1252,26 @@ class AgentLoop:
                 }, ensure_ascii=False)
                 self.event_queue.put(f"C:{cmd_info}")
 
+                # ── Hook: before_tool_call ──
+                if self.plugin_manager:
+                    modified_input = self.plugin_manager.fire_before_tool_call(
+                        tool_name, tool_input)
+                    if modified_input is None:
+                        blocked_msg = "Tool call blocked by plugin."
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": blocked_msg
+                        })
+                        self._log_tool_call(step + 1, tool_name, tool_input, blocked_msg)
+                        continue
+                    tool_input = modified_input
+
                 if tool_name == "ask_user":
                     question = tool_input.get("question", "")
+                    # ── Hook: user_input_required ──
+                    if self.plugin_manager:
+                        self.plugin_manager.fire_user_input_required(question)
                     self.event_queue.put(f"Q:{json.dumps(question, ensure_ascii=False)}")
                     reply = self._wait_for_user_input()
                     if self._stop_event.is_set():
@@ -791,7 +1302,13 @@ class AgentLoop:
                             self._log_tool_call(step + 1, tool_name, tool_input, cancel_msg)
                             continue
 
-                    result_text = self.executor.execute(tool_name, tool_input)
+                    result_text = self._execute_tool(tool_name, tool_input)
+
+                    # ── Hook: after_tool_call ──
+                    if self.plugin_manager:
+                        result_text = self.plugin_manager.fire_after_tool_call(
+                            tool_name, tool_input, result_text)
+
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tool_id,
@@ -843,6 +1360,11 @@ class AgentLoop:
 
         try:
             with self.anthropic_client.messages.stream(**call_params) as stream:
+                # Throttle for streaming hooks
+                _last_ts_fire = 0.0
+                _reasoning_buf = ""
+                _content_buf = ""
+
                 for event in stream:
                     if self._stop_event.is_set():
                         try:
@@ -868,11 +1390,24 @@ class AgentLoop:
                             reasoning_parts.append(delta.thinking)
                             _current_thinking_text += delta.thinking
                             self.event_queue.put(f"T:{delta.thinking}")
+                            _reasoning_buf += delta.thinking
                         if hasattr(delta, 'signature') and delta.signature:
                             _current_thinking_sig = delta.signature
                         if hasattr(delta, 'text') and delta.text:
                             content_parts.append(delta.text)
                             self.event_queue.put(f"R:{delta.text}")
+                            _content_buf += delta.text
+
+                        # Throttled streaming hooks
+                        now = time.time()
+                        if self.plugin_manager and now - _last_ts_fire > 0.1:
+                            if _reasoning_buf:
+                                self.plugin_manager.fire_reasoning(_reasoning_buf)
+                                _reasoning_buf = ""
+                            if _content_buf:
+                                self.plugin_manager.fire_content(_content_buf)
+                                _content_buf = ""
+                            _last_ts_fire = now
 
                     elif event.type == "content_block_stop":
                         if hasattr(event, 'content_block') and event.content_block:
@@ -902,6 +1437,13 @@ class AgentLoop:
                                     "input_tokens": getattr(msg_usage, 'input_tokens', 0) or 0,
                                     "output_tokens": getattr(msg_usage, 'output_tokens', 0) or 0
                                 }
+
+                # Flush remaining streaming tokens
+                if self.plugin_manager:
+                    if _reasoning_buf:
+                        self.plugin_manager.fire_reasoning(_reasoning_buf)
+                    if _content_buf:
+                        self.plugin_manager.fire_content(_content_buf)
 
         except Exception as e:
             self.event_queue.put(f"E:Anthropic API call failed: {str(e)}")
