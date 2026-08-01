@@ -3,17 +3,21 @@
 
 import os
 import json
+import asyncio
 import base64
 import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 
 from config import ConfigManager
 from event_queue import EventQueue
-from loop import AgentLoop
+from loop import AgentLoop  # 保留旧版兼容
+from async_loop import AsyncAgentLoop
 from plugin_system.manager import PluginManager
+from lifecycle_manager import get_lifecycle_manager
+from sandbox_pool import get_sandbox_pool
 
 import json
 
@@ -64,53 +68,34 @@ def extract_text_from_file(file_path: str) -> str:
 
 MEMORY_DIR_NAME = 'memory'
 MEMORY_FILE_NAME = 'memory.json'
+MAX_SESSIONS = 16
 
 
-class AgentAPI:
+class Session:
+    """A single conversation session, like a browser tab.
+    
+    Each session has its own event queue, agent loop, message history,
+    persistent memory, and workspace (project_root). Multiple sessions can run concurrently.
+    """
 
-    def __init__(self, app_dir: str):
-        self.config_manager = ConfigManager(app_dir)
-        self.app_dir = app_dir
+    def __init__(self, session_id: str, app_dir: str, workspace: str = ""):
+        self.session_id = session_id
+        self.title = f"Tab {session_id[-6:]}"
+        self.workspace = workspace  # per-session project_root
         self.event_queue: Optional[EventQueue] = None
         self.loop: Optional[AgentLoop] = None
         self._loop_thread: Optional[threading.Thread] = None
-        self.conversation_history: list = []  
-
-
-        self.current_messages: list = []   
-        self.memory_history: list = []     
-        self.memory_summary: str = ""      
+        self.conversation_history: list = []
+        self.current_messages: list = []
+        self.memory_history: list = []
+        self.memory_summary: str = ""
+        self._app_dir = app_dir
         self._load_memory()
 
-        # ── Plugin system ──
-        cfg = self.config_manager.load()
-        plugin_dirs = cfg.get("plugin_dirs", [])
-        self.plugin_manager = PluginManager(
-            plugin_dirs=plugin_dirs,
-            app_dir=app_dir,
-            project_root=cfg.get("project_root", ""),
-            config=cfg,  # pass full config for security settings
-        )
-        self.plugin_manager.update_config_snapshot(cfg)
-        if cfg.get("plugins_enabled", True):
-            self.plugin_manager.discover_and_load()
-        else:
-            self.plugin_manager.set_plugin_dirs([])
-
-        self._ensure_project_root()
-
-    def _ensure_project_root(self):
-        cfg = self.config_manager.load()
-        root = cfg.get("project_root", "")
-        if root:
-            os.makedirs(root, exist_ok=True)
-
-
     def _get_memory_file(self) -> str:
-        return os.path.join(self.app_dir, MEMORY_DIR_NAME, MEMORY_FILE_NAME)
+        return os.path.join(self._app_dir, MEMORY_DIR_NAME, f"memory_{self.session_id}.json")
 
     def _load_memory(self):
-        """从磁盘加载持久化记忆。"""
         memory_file = self._get_memory_file()
         if os.path.exists(memory_file):
             try:
@@ -123,10 +108,9 @@ class AgentAPI:
                 self.memory_summary = ""
 
     def _save_memory(self):
-        """将记忆保存到磁盘。"""
-        memory_dir = Path(self.app_dir) / MEMORY_DIR_NAME
+        memory_dir = Path(self._app_dir) / MEMORY_DIR_NAME
         memory_dir.mkdir(parents=True, exist_ok=True)
-        memory_file = memory_dir / MEMORY_FILE_NAME
+        memory_file = memory_dir / f"memory_{self.session_id}.json"
         data = {
             'history': self.memory_history,
             'summary': self.memory_summary,
@@ -134,9 +118,8 @@ class AgentAPI:
         with open(memory_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
-    def _trim_memory(self):
-        """修剪记忆，保留最近 max_rounds 轮（移植自 duo2.py 的 _trim_memory）。"""
-        cfg = self.config_manager.load()
+    def _trim_memory(self, config_manager):
+        cfg = config_manager.load()
         memory_enabled = cfg.get('memory', True)
         if not memory_enabled:
             return
@@ -147,12 +130,10 @@ class AgentAPI:
             return
 
         if mode == 'full':
-            
             excess = (total_rounds - max_rounds) * 2
             self.memory_history = self.memory_history[excess:]
             self._save_memory()
         else:
-            
             keep_rounds = 2
             keep_count = keep_rounds * 2
             if len(self.memory_history) <= keep_count:
@@ -161,17 +142,13 @@ class AgentAPI:
             recent = self.memory_history[-keep_count:]
             text = "\n".join([f"{m['role']}: {str(m.get('content', ''))[:500]}"
                               for m in to_summarize])
-            
             summary_text = text[:400] + "..." if len(text) > 400 else text
             self.memory_summary = f"历史摘要：{summary_text}"
             self.memory_history = recent
             self._save_memory()
 
-    def get_initial_messages(self) -> list:
-        return self.current_messages.copy()
-
-    def get_memory_content(self) -> str:
-        cfg = self.config_manager.load()
+    def get_memory_content(self, config_manager) -> str:
+        cfg = config_manager.load()
         memory_enabled = cfg.get('memory', True)
         if not memory_enabled:
             return ""
@@ -182,7 +159,6 @@ class AgentAPI:
         if cfg.get('memory_mode', 'full') == 'summary' and self.memory_summary:
             return prefix + self.memory_summary + "\n"
 
-        # 取最近 N 条显示（防止单条过长）
         recent = self.memory_history[-20:]
         text_lines = []
         for m in recent:
@@ -192,7 +168,7 @@ class AgentAPI:
         return prefix + "历史对话：\n" + "\n".join(text_lines) + "\n"
 
     def clear_memory(self) -> bool:
-        memory_file = Path(self.app_dir) / MEMORY_DIR_NAME / MEMORY_FILE_NAME
+        memory_file = Path(self._app_dir) / MEMORY_DIR_NAME / f"memory_{self.session_id}.json"
         if memory_file.exists():
             memory_file.unlink()
             self.memory_history = []
@@ -200,16 +176,155 @@ class AgentAPI:
             return True
         return False
 
-    def _create_loop(self):
+
+class AgentAPI:
+
+    def __init__(self, app_dir: str):
+        self.config_manager = ConfigManager(app_dir)
+        self.app_dir = app_dir
+        self.sessions: Dict[str, Session] = {}
+        self._session_counter = 0
+        self._sessions_lock = threading.Lock()
+
+        # Create default session
+        self._create_session_internal()
+
+        # ── Plugin system ──
+        cfg = self.config_manager.load()
+        plugin_dirs = cfg.get("plugin_dirs", [])
+        self.plugin_manager = PluginManager(
+            plugin_dirs=plugin_dirs,
+            app_dir=app_dir,
+            project_root=cfg.get("project_root", ""),
+            config=cfg,
+        )
+        self.plugin_manager.update_config_snapshot(cfg)
+        if cfg.get("plugins_enabled", True):
+            self.plugin_manager.discover_and_load()
+        else:
+            self.plugin_manager.set_plugin_dirs([])
+
+        self._ensure_project_root()
+
+    def _create_session_internal(self, workspace: str = "") -> str:
+        """Create a new session and return its ID (caller must hold lock)."""
+        self._session_counter += 1
+        sid = f"session_{self._session_counter}"
+        session = Session(sid, self.app_dir, workspace=workspace)
+        self.sessions[sid] = session
+        return sid
+
+    def _ensure_project_root(self):
+        cfg = self.config_manager.load()
+        root = cfg.get("project_root", "")
+        if root:
+            os.makedirs(root, exist_ok=True)
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Session management (exposed to frontend)
+    # ═══════════════════════════════════════════════════════════════
+
+    def create_session(self, workspace: str = "") -> str:
+        """Create a new conversation session and return its ID.
+        
+        Args:
+            workspace: Optional project root path for this session.
+                       Defaults to global config's project_root.
+        """
+        with self._sessions_lock:
+            if len(self.sessions) >= MAX_SESSIONS:
+                return f"error:Maximum {MAX_SESSIONS} sessions allowed"
+            return self._create_session_internal(workspace=workspace)
+
+    def close_session(self, session_id: str) -> str:
+        """Close a session. Stops any running task and removes the session."""
+        with self._sessions_lock:
+            if session_id not in self.sessions:
+                return "error:Session not found"
+            if len(self.sessions) <= 1:
+                return "error:Cannot close the last session"
+            session = self.sessions[session_id]
+            if session.loop and session._loop_thread and session._loop_thread.is_alive():
+                session.loop.stop()
+            del self.sessions[session_id]
+            return "ok"
+
+    def get_sessions(self) -> list:
+        """Return a list of all session summaries."""
+        result = []
+        with self._sessions_lock:
+            for sid, s in self.sessions.items():
+                has_task = bool(s.loop and s._loop_thread and s._loop_thread.is_alive())
+                result.append({
+                    "id": sid,
+                    "title": s.title,
+                    "workspace": s.workspace,
+                    "has_task": has_task,
+                    "message_count": len(s.current_messages),
+                })
+        return result
+
+    def set_session_title(self, session_id: str, title: str) -> str:
+        """Set the display title of a session."""
+        with self._sessions_lock:
+            if session_id not in self.sessions:
+                return "error:Session not found"
+            self.sessions[session_id].title = title
+            return "ok"
+
+    def set_session_workspace(self, session_id: str, workspace: str) -> str:
+        """Set the workspace (project_root) for a specific session."""
+        with self._sessions_lock:
+            if session_id not in self.sessions:
+                return "error:Session not found"
+            self.sessions[session_id].workspace = workspace
+            return "ok"
+
+    def get_session_info(self, session_id: str) -> dict:
+        """Get detailed info about a session, including workspace."""
+        with self._sessions_lock:
+            if session_id not in self.sessions:
+                return {"error": "Session not found"}
+            s = self.sessions[session_id]
+            has_task = bool(s.loop and s._loop_thread and s._loop_thread.is_alive())
+            return {
+                "id": s.session_id,
+                "title": s.title,
+                "workspace": s.workspace,
+                "has_task": has_task,
+                "message_count": len(s.current_messages),
+            }
+
+    def _get_session(self, session_id: str) -> Session:
+        """Get a session by ID. Falls back to first available if not found."""
+        with self._sessions_lock:
+            if session_id in self.sessions:
+                return self.sessions[session_id]
+        # Fallback: return first available session
+        with self._sessions_lock:
+            if self.sessions:
+                return next(iter(self.sessions.values()))
+            # Create default if none exist
+            sid = self._create_session_internal()
+            return self.sessions[sid]
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Core task methods (session-scoped)
+    # ═══════════════════════════════════════════════════════════════
+
+    def _create_loop(self, session: Session):
         cfg = self.config_manager.load()
         api_key = self.config_manager.get_api_key()
         if not api_key:
             raise RuntimeError("API key not configured")
-        self.event_queue = EventQueue(max_size=cfg.get("queue_max_size", 200))
+        session.event_queue = EventQueue(max_size=cfg.get("queue_max_size", 200))
 
         model = cfg.get("model", "")
         if not model or not model.strip() or model.strip() in (".", ""):
             model = "deepseek-v4-pro"
+
+        # Use session-specific workspace, fall back to global config
+        project_root = session.workspace or cfg.get("project_root", "")
 
         # Update plugin manager config
         self.plugin_manager.update_config_snapshot(cfg)
@@ -224,10 +339,11 @@ class AgentAPI:
         else:
             self.plugin_manager.set_plugin_dirs([])
 
-        self.loop = AgentLoop(
+        # ── 使用异步 AgentLoop（新架构）──
+        session.loop = AsyncAgentLoop(
             api_key=api_key,
-            project_root=cfg.get("project_root", ""),
-            event_queue=self.event_queue,
+            project_root=project_root,
+            event_queue=session.event_queue,
             app_dir=self.app_dir,
             model=model,
             base_url=cfg.get("api_base", "https://api.deepseek.com"),
@@ -242,27 +358,33 @@ class AgentAPI:
             use_responses_api=cfg.get("use_responses_api", True),
         )
 
-    def send_message(self, text: str) -> str:
-        if self.loop and self._loop_thread and self._loop_thread.is_alive():
+    def send_message(self, session_id: str, text: str) -> str:
+        session = self._get_session(session_id)
+        if session.loop and session._loop_thread and session._loop_thread.is_alive():
             return "error:Task already running"
         try:
-            self._create_loop()
+            self._create_loop(session)
         except RuntimeError as e:
             return f"error:{str(e)}"
 
-        self.current_messages.append({"role": "user", "content": text})
-        
-        print("[DEBUG] current_messages 长度:", len(self.current_messages))
-        print("[DEBUG] memory_history 长度:", len(self.memory_history))
-        
+        session.current_messages.append({"role": "user", "content": text})
+
+        print("[DEBUG] session:", session.session_id, "current_messages 长度:", len(session.current_messages))
+        print("[DEBUG] memory_history 长度:", len(session.memory_history))
+
         def _run():
+            """在新线程中创建独立的事件循环，运行异步 AgentLoop。"""
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             try:
-                current_history = self.current_messages.copy()
-                memory_content = self.get_memory_content()
-                
-                final_reply = self.loop.run(text, history=current_history,
-                                            memory_content=memory_content)
-                self.conversation_history = self.loop.get_conversation_history()
+                current_history = session.current_messages.copy()
+                memory_content = session.get_memory_content(self.config_manager)
+
+                final_reply = loop.run_until_complete(
+                    session.loop.run(text, history=current_history,
+                                     memory_content=memory_content)
+                )
+                session.conversation_history = session.loop.get_conversation_history()
 
                 is_valid_reply = (
                     final_reply
@@ -270,41 +392,57 @@ class AgentAPI:
                     and not final_reply.startswith("__ERROR__")
                 )
                 if is_valid_reply:
-                    self.current_messages.append({"role": "assistant",
+                    session.current_messages.append({"role": "assistant",
                                                   "content": final_reply})
-                    self.memory_history.append({"role": "user", "content": text})
-                    self.memory_history.append({"role": "assistant",
+                    session.memory_history.append({"role": "user", "content": text})
+                    session.memory_history.append({"role": "assistant",
                                                 "content": final_reply})
-                    self._trim_memory()
-                    self._save_memory()
+                    session._trim_memory(self.config_manager)
+                    session._save_memory()
                 elif final_reply in ("stopped", "timeout", "max_steps"):
-                    self.current_messages.append({"role": "assistant",
+                    session.current_messages.append({"role": "assistant",
                                                   "content": f"(Task {final_reply})"})
             except Exception:
                 err = traceback.format_exc()
-                self.event_queue.put(f"E:{err}")
-                self.event_queue.signal_finish()
+                session.event_queue.put(f"E:{err}")
+                session.event_queue.signal_finish()
+            finally:
+                # 清理沙箱池中的资源
+                try:
+                    loop.run_until_complete(
+                        session.loop.executor.cleanup()
+                    )
+                except Exception:
+                    pass
+                loop.close()
 
-        self._loop_thread = threading.Thread(target=_run, daemon=True)
-        self._loop_thread.start()
+        session._loop_thread = threading.Thread(target=_run, daemon=True)
+        session._loop_thread.start()
         return "ok"
 
-    def get_next_event(self) -> Optional[str]:
-        if not self.event_queue:
+    def get_next_event(self, session_id: str = "") -> Optional[str]:
+        session = self._get_session(session_id)
+        if not session.event_queue:
             return None
-        return self.event_queue.get()
+        return session.event_queue.get()
 
-    def provide_user_input(self, text: str) -> str:
-        if not self.loop:
+    def provide_user_input(self, session_id: str, text: str) -> str:
+        session = self._get_session(session_id)
+        if not session.loop:
             return "error:No active task"
-        self.loop.provide_user_input(text)
+        session.loop.provide_user_input(text)
         return "ok"
 
-    def stop_task(self) -> str:
-        if not self.loop:
+    def stop_task(self, session_id: str = "") -> str:
+        session = self._get_session(session_id)
+        if not session.loop:
             return "error:No active task"
-        self.loop.stop()
+        session.loop.stop()
         return "stopped"
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Config / global (unchanged signatures, no session needed)
+    # ═══════════════════════════════════════════════════════════════
 
     def get_config(self) -> dict:
         return self.config_manager.load()
@@ -317,7 +455,6 @@ class AgentAPI:
         return self.config_manager.is_first_run()
 
     def reset_config(self) -> dict:
-        """重置所有配置为默认值，返回默认配置。"""
         return self.config_manager.reset_to_defaults()
 
     def set_api_key(self, key: str) -> str:
@@ -331,7 +468,6 @@ class AgentAPI:
         return "ok"
 
     def validate_api_key(self, key: str, base_url: str) -> str:
-        """仅校验 API Key 是否有效，不保存。返回 'ok' 或 'error:...'"""
         if not key or not key.strip():
             return "error:API key is empty"
         if not base_url or not base_url.strip():
@@ -354,7 +490,6 @@ class AgentAPI:
             return "error"
 
     def pick_directory(self) -> str:
-        """打开文件夹选择对话框，返回选中路径"""
         import webview
         try:
             result = webview.windows[0].create_file_dialog(
@@ -368,7 +503,6 @@ class AgentAPI:
             return ""
 
     def pick_save_file(self) -> str:
-        """打开保存文件对话框，返回选中路径"""
         import webview
         try:
             result = webview.windows[0].create_file_dialog(
@@ -383,7 +517,6 @@ class AgentAPI:
             return ""
 
     def pick_open_file(self) -> str:
-        """打开文件选择对话框，返回选中路径"""
         import webview
         try:
             result = webview.windows[0].create_file_dialog(
@@ -437,11 +570,7 @@ class AgentAPI:
                     pass
             return {"error": error_msg}
 
-
     def upload_files(self, files_data: list) -> list:
-        """接收前端 base64 编码的文件列表，解码保存到临时目录并提取文本。
-        返回 [{"name":..., "size":..., "type":..., "content":...}, ...]。
-        """
         result = []
         for f in files_data:
             try:
@@ -469,31 +598,49 @@ class AgentAPI:
                 })
         return result
 
+    # ═══════════════════════════════════════════════════════════════
+    #  History & Memory (session-scoped)
+    # ═══════════════════════════════════════════════════════════════
 
-    def get_last_usage(self) -> dict:
-        """返回最近一次 API 调用的 token 用量。"""
-        if not self.loop:
+    def get_initial_messages(self, session_id: str = "") -> list:
+        session = self._get_session(session_id)
+        return session.current_messages.copy()
+
+    def get_memory_content(self, session_id: str = "") -> str:
+        session = self._get_session(session_id)
+        return session.get_memory_content(self.config_manager)
+
+    def clear_memory(self, session_id: str = "") -> bool:
+        session = self._get_session(session_id)
+        return session.clear_memory()
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Token usage (session-scoped)
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_last_usage(self, session_id: str = "") -> dict:
+        session = self._get_session(session_id)
+        if not session.loop:
             return {}
-        return self.loop.get_last_usage()
+        return session.loop.get_last_usage()
 
-    def get_total_usage(self) -> dict:
-        """返回当前任务的累计 token 用量。"""
-        if not self.loop:
+    def get_total_usage(self, session_id: str = "") -> dict:
+        session = self._get_session(session_id)
+        if not session.loop:
             return {}
-        return self.loop.get_total_usage()
+        return session.loop.get_total_usage()
 
-    # Plugin Management API
+    # ═══════════════════════════════════════════════════════════════
+    #  Plugin Management API (unchanged — global scope)
+    # ═══════════════════════════════════════════════════════════════
 
     def get_plugins(self) -> list:
-        """返回所有已发现插件的元数据列表。"""
         return self.plugin_manager.get_all_plugins()
 
     def get_plugin_dirs(self) -> list:
-        """返回当前配置的插件目录列表。"""
         return self.plugin_manager.plugin_dirs
 
     def add_plugin_dir(self, path: str) -> str:
-        """添加一个插件目录并重新扫描。"""
         cfg = self.config_manager.load()
         dirs = cfg.get("plugin_dirs", [])
         if path not in dirs:
@@ -504,7 +651,6 @@ class AgentAPI:
         return "ok"
 
     def remove_plugin_dir(self, path: str) -> str:
-        """移除一个插件目录并重新扫描。"""
         cfg = self.config_manager.load()
         dirs = cfg.get("plugin_dirs", [])
         if path in dirs:
@@ -515,14 +661,12 @@ class AgentAPI:
         return "ok"
 
     def reload_plugins(self) -> str:
-        """重新扫描所有插件目录。"""
         cfg = self.config_manager.load()
         dirs = cfg.get("plugin_dirs", [])
         self.plugin_manager.set_plugin_dirs(dirs)
         return "ok"
 
     def pick_plugin_dir(self) -> str:
-        """打开文件夹选择对话框，返回选中路径（用于选择插件目录）。"""
         import webview
         try:
             result = webview.windows[0].create_file_dialog(
@@ -535,14 +679,10 @@ class AgentAPI:
         except Exception:
             return ""
 
-    # Plugin Security API 
-
     def get_plugin_audit_results(self) -> dict:
-        """返回所有插件的安全审计结果。"""
         return self.plugin_manager.get_audit_results()
 
     def get_plugin_security_config(self) -> dict:
-        """返回当前插件安全配置。"""
         cfg = self.config_manager.load()
         return {
             "audit": cfg.get("plugin_security_audit", "warn"),
@@ -555,15 +695,43 @@ class AgentAPI:
                                    import_restrict: str = "off",
                                    require_permissions: bool = False,
                                    resource_limit: bool = False) -> str:
-        """更新插件安全配置并保存，触发插件重新加载。"""
         cfg = self.config_manager.load()
         cfg["plugin_security_audit"] = audit
         cfg["plugin_security_import_restrict"] = import_restrict
         cfg["plugin_security_require_permissions"] = require_permissions
         cfg["plugin_security_resource_limit"] = resource_limit
         self.config_manager.save(cfg)
-
-        # Update the plugin manager's security module and reload
         self.plugin_manager.update_security_config(cfg)
         self.plugin_manager.set_plugin_dirs(cfg.get("plugin_dirs", []))
         return "ok"
+
+    # ═══════════════════════════════════════════════════════════════
+    #  新异步架构：统计信息 API
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_sandbox_pool_stats(self) -> dict:
+        """获取沙箱池状态。"""
+        from sandbox_pool import get_sandbox_pool
+        pool = get_sandbox_pool()
+        return pool.get_stats()
+
+    def get_file_io_stats(self) -> dict:
+        """获取文件 I/O 队列状态。"""
+        from file_io_queue import get_file_io_queue
+        queue = get_file_io_queue()
+        stats = queue.get_stats()
+        # 附加当前活跃文件的访问者信息
+        stats["active_files"] = queue.get_all_active_files()
+        return stats
+
+    def get_lifecycle_stats(self) -> dict:
+        """获取生命周期管理器状态。"""
+        from lifecycle_manager import get_lifecycle_manager
+        lm = get_lifecycle_manager()
+        return lm.get_stats()
+
+    def get_resource_stats(self) -> dict:
+        """获取资源隔离器状态。"""
+        from resource_isolator import get_resource_isolator
+        isolator = get_resource_isolator()
+        return isolator.get_stats()

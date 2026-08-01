@@ -49,10 +49,148 @@ body {
 }
 #header button:hover { background: #e8e8e8; }
 
+/* ── Tab Bar ── */
+#tab-bar {
+    display: flex;
+    align-items: stretch;
+    background: #e8e8e8;
+    border-bottom: 1px solid #ccc;
+    flex-shrink: 0;
+    height: 34px;
+    padding: 0 4px;
+    gap: 0;
+}
+#tab-list {
+    display: flex;
+    flex: 1;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 1px;
+    align-items: flex-end;
+    padding-top: 4px;
+    min-width: 0;
+}
+#tab-list::-webkit-scrollbar { height: 3px; }
+#tab-list::-webkit-scrollbar-thumb { background: #bbb; border-radius: 2px; }
+.tab-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    background: #d4d4d4;
+    border: 1px solid #bbb;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    font-size: 12px;
+    color: #555;
+    white-space: nowrap;
+    min-width: 70px;
+    max-width: 180px;
+    transition: all 0.12s;
+    user-select: none;
+    flex-shrink: 0;
+    height: 28px;
+    line-height: 1;
+    position: relative;
+}
+.tab-btn:hover { background: #ccc; color: #333; }
+.tab-btn.active {
+    background: #fff;
+    color: #007aff;
+    border-color: #ccc;
+    font-weight: 600;
+    z-index: 1;
+}
+.tab-btn .tab-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    text-align: center;
+    min-width: 30px;
+}
+.tab-btn .tab-ws-icon {
+    font-size: 11px;
+    flex-shrink: 0;
+    opacity: 0.7;
+    margin-right: 1px;
+}
+.tab-btn .tab-close {
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 3px;
+    border-radius: 50%;
+    color: #999;
+    font-weight: bold;
+    transition: all 0.12s;
+    flex-shrink: 0;
+    visibility: hidden;
+}
+.tab-btn:hover .tab-close { visibility: visible; }
+.tab-btn .tab-close:hover { color: #fff; background: #dc3545; }
+.tab-btn.active .tab-close { visibility: visible; }
+.tab-btn .tab-running-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #34c759;
+    flex-shrink: 0;
+    animation: tabPulse 1.5s ease-in-out infinite;
+}
+@keyframes tabPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+@keyframes tabPulseBlue {
+    0%, 100% { opacity: 1; box-shadow: 0 0 4px rgba(0,122,255,0.6); }
+    50% { opacity: 0.3; box-shadow: 0 0 10px rgba(0,122,255,1); }
+}
+@keyframes tabPulseOrange {
+    0%, 100% { opacity: 1; box-shadow: 0 0 4px rgba(255,149,0,0.6); }
+    50% { opacity: 0.3; box-shadow: 0 0 10px rgba(255,149,0,1); }
+}
+.tab-btn .tab-ask-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #007aff;
+    flex-shrink: 0;
+    animation: tabPulseBlue 0.7s ease-in-out infinite;
+}
+.tab-btn .tab-confirm-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #ff9500;
+    flex-shrink: 0;
+    animation: tabPulseOrange 0.7s ease-in-out infinite;
+}
+#new-tab-btn {
+    width: 28px; height: 28px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 18px;
+    color: #888;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.12s;
+    flex-shrink: 0;
+    margin-top: 3px;
+    line-height: 1;
+    padding: 0;
+}
+#new-tab-btn:hover { background: #ccc; color: #333; }
+
+/* Tab context menu */
+.ctx-item:hover { background: #e8e8e8; }
+
 .panels {
     flex: 1;
-    display: flex;
+    display: none;
     overflow: hidden;
+}
+.panels.visible {
+    display: flex;
 }
 
 .chat-panel, .cmd-panel {
@@ -1248,14 +1386,30 @@ body {
     </div>
 </div>
 
-<div class="panels">
-    <div class="chat-panel">
+<div id="tab-bar">
+    <div id="tab-list"></div>
+    <button id="new-tab-btn" title="New Tab (Ctrl+T)">+</button>
+</div>
+
+<div class="panels" id="panels-container">
+    <div class="chat-panel" id="chat-panel-default">
         <div class="panel-title" data-i18n="chat">Chat</div>
-        <div class="panel-content" id="chat-content"></div>
+        <div class="panel-content" id="chat-content-default"></div>
     </div>
-    <div class="cmd-panel">
+    <div class="cmd-panel" id="cmd-panel-default">
         <div class="panel-title" data-i18n="commands">Commands</div>
-        <div class="panel-content" id="cmd-content"></div>
+        <div class="panel-content" id="cmd-content-default"></div>
+    </div>
+</div>
+
+<div class="panels" id="panels-template" style="display:none;">
+    <div class="chat-panel" id="chat-panel-template">
+        <div class="panel-title" data-i18n="chat">Chat</div>
+        <div class="panel-content" id="chat-content-template"></div>
+    </div>
+    <div class="cmd-panel" id="cmd-panel-template">
+        <div class="panel-title" data-i18n="commands">Commands</div>
+        <div class="panel-content" id="cmd-content-template"></div>
     </div>
 </div>
 
@@ -1268,6 +1422,7 @@ body {
 <div id="status-bar">
     <div class="status-left">
         <span id="status-text">Ready</span>
+        <span id="workspace-display" style="color:#888;font-size:10px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
     </div>
     <div class="token-info" id="token-display"></div>
 </div>
@@ -1478,7 +1633,7 @@ body {
         <h2>About</h2>
         <p><strong>Author:</strong> xingluosama</p>
         <p><strong>Studio:</strong> NORP Studio</p>
-        <p><strong>Version:</strong> Beta 1.0.0</p>
+        <p><strong>Version:</strong> pre-release 0.2.1</p>
         <p style="margin-top:12px; color:#888; font-size:12px;">Built based on the OpenAI SDK specification.</p>
         <div class="btn-row">
             <button class="btn-primary" id="about-close-btn">OK</button>
@@ -2558,19 +2713,461 @@ function tf(key, lang) {
     return text;
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  MULTI-TAB SUPPORT — like browser tabs
+// ═══════════════════════════════════════════════════════════════
+
+var tabs = [];
+var activeTabId = null;
+var tabIdCounter = 0;
+
+var MAX_TABS = 16;
+
+function createTabState(sessionId, title, workspace) {
+    var id = 'tab_' + (++tabIdCounter);
+    var st = {
+        dbId: sessionId,          // backend session ID
+        uiId: id,                 // frontend tab ID
+        title: title || 'Tab ' + tabIdCounter,
+        workspace: workspace || '', // per-tab workspace path
+
+        // DOM elements (set after panel creation)
+        panelsEl: null,           // the panels container div
+        chatPanel: null,
+        cmdPanel: null,
+        chatContent: null,
+        cmdContent: null,
+
+        // Streaming state
+        currentThinkingEl: null,
+        currentReplyEl: null,
+        currentCmdEl: null,
+        totalTokens: { input: 0, output: 0, tool: 0 },
+
+        // Task state
+        isStreaming: false,
+        isWaiting: false,
+        pollingTimer: null,
+
+        // File attachments
+        selectedFiles: [],
+
+        // Pending modals — deferred until user switches to this tab
+        pendingQuestion: null,   // {text: string, sessionId: string}
+        pendingConfirm: null,    // {tool: string, path: string, sessionId: string}
+
+        // Conversation messages (for display)
+        messages: [],
+    };
+    return st;
+}
+
+function createTabPanels(tab) {
+    // Clone the template panels for this tab
+    var template = document.getElementById('panels-template');
+    var clone = template.cloneNode(true);
+    clone.id = 'panels-' + tab.uiId;
+    clone.style.display = '';  // clear inline style so CSS classes can control visibility
+    template.parentNode.insertBefore(clone, template);
+
+    // Store reference to panels container
+    tab.panelsEl = clone;
+
+    // Find elements in the clone
+    var chatPanel = clone.querySelector('.chat-panel');
+    var cmdPanel = clone.querySelector('.cmd-panel');
+    var chatContent = clone.querySelector('.panel-content');
+    var cmdContent = cmdPanel ? cmdPanel.querySelector('.panel-content') : clone.querySelectorAll('.panel-content')[1];
+
+    // Remove template IDs
+    chatPanel.id = 'chat-panel-' + tab.uiId;
+    if (cmdPanel) cmdPanel.id = 'cmd-panel-' + tab.uiId;
+    chatContent.id = 'chat-content-' + tab.uiId;
+    if (cmdContent) cmdContent.id = 'cmd-content-' + tab.uiId;
+
+    tab.chatPanel = chatPanel;
+    tab.cmdPanel = cmdPanel;
+    tab.chatContent = chatContent;
+    tab.cmdContent = cmdContent;
+
+    return clone;
+}
+
+function createTab(sessionId, title, makeActive, useDefaultPanels, workspace) {
+    if (makeActive === undefined) makeActive = true;
+    var tab = createTabState(sessionId, title, workspace);
+    tabs.push(tab);
+
+    if (useDefaultPanels) {
+        // Reuse the existing default panels (for first tab)
+        tab.panelsEl = document.getElementById('panels-container');
+        tab.chatPanel = document.getElementById('chat-panel-default');
+        tab.cmdPanel = document.getElementById('cmd-panel-default');
+        tab.chatContent = document.getElementById('chat-content-default');
+        tab.cmdContent = document.getElementById('cmd-content-default');
+    } else {
+        createTabPanels(tab);
+    }
+
+    if (makeActive || !activeTabId) {
+        switchToTab(tab.uiId);
+    }
+
+    updateTabBar();
+    return tab;
+}
+
+function getTab(uiId) {
+    for (var i = 0; i < tabs.length; i++) {
+        if (tabs[i].uiId === uiId) return tabs[i];
+    }
+    return null;
+}
+
+function getActiveTab() {
+    return getTab(activeTabId);
+}
+
+function switchToTab(uiId) {
+    var newTab = getTab(uiId);
+    if (!newTab) return;
+    if (activeTabId === uiId) return; // already active
+
+    // Save current tab state
+    if (activeTabId) {
+        var oldTab = getTab(activeTabId);
+        if (oldTab) {
+            oldTab.currentThinkingEl = currentThinkingEl;
+            oldTab.currentReplyEl = currentReplyEl;
+            oldTab.currentCmdEl = currentCmdEl;
+            oldTab.selectedFiles = selectedFiles;
+            // Polling is per-tab — never paused, each tab manages its own timer
+
+            // Save ask_user modal state if it belongs to this tab
+            if (askUserModal.style.display === 'block' && _pendingAskSessionId === oldTab.dbId) {
+                oldTab.pendingQuestion = {
+                    text: _pendingAskQuestionRaw || '',
+                    sessionId: _pendingAskSessionId
+                };
+                hideAskUserModal();
+            }
+
+            // Save confirm-write modal state if it belongs to this tab
+            if (confirmWriteModal.style.display === 'block' && _pendingConfirmSessionId === oldTab.dbId) {
+                oldTab.pendingConfirm = {
+                    tool: confirmWriteMessage.textContent.includes('delete') ? 'delete_file' :
+                          confirmWriteMessage.textContent.includes('modify') ? 'replace_in_file' : 'write_file',
+                    path: confirmWriteMessage.textContent.split(':').pop().trim() || '',
+                    sessionId: _pendingConfirmSessionId
+                };
+                hideConfirmWriteModal();
+            }
+        }
+        // Hide old panels using stored reference
+        var oldTabRef = getTab(activeTabId);
+        if (oldTabRef && oldTabRef.panelsEl) {
+            oldTabRef.panelsEl.classList.remove('visible');
+        }
+    }
+
+    // Show new tab's panels using stored reference
+    if (newTab.panelsEl) {
+        newTab.panelsEl.classList.add('visible');
+    }
+
+    // Update global references
+    activeTabId = uiId;
+    chatContent = newTab.chatContent;
+    cmdContent = newTab.cmdContent;
+    currentThinkingEl = newTab.currentThinkingEl;
+    currentReplyEl = newTab.currentReplyEl;
+    currentCmdEl = newTab.currentCmdEl;
+    selectedFiles = newTab.selectedFiles || [];
+    updateFileBadges();
+
+    // Update token display for the newly active tab
+    updateTokenDisplay(newTab.totalTokens);
+
+    // Update status bar and workspace display
+    updateWorkspaceDisplay(newTab.workspace);
+
+    // Update global UI to reflect new tab's streaming state
+    // (each tab's polling runs independently — we just update the display)
+    if (newTab.isStreaming) {
+        isStreaming = true;
+        isWaiting = newTab.isWaiting;
+        sendBtn.style.display = 'none';
+        stopBtn.style.display = 'inline-block';
+        statusText.textContent = newTab.isWaiting ? t('waiting_reply') : t('running');
+    } else {
+        isStreaming = false;
+        isWaiting = false;
+        sendBtn.style.display = 'inline-block';
+        stopBtn.style.display = 'none';
+        statusText.textContent = t('ready');
+    }
+
+    updateTabBar();
+
+    // Restore pending ask_user modal for the newly active tab
+    if (newTab.pendingQuestion) {
+        var pq = newTab.pendingQuestion;
+        newTab.pendingQuestion = null;
+        // Use setTimeout to let the DOM settle before showing modal
+        setTimeout(function() {
+            showAskUserModal(pq.text, pq.sessionId);
+        }, 50);
+    }
+
+    // Restore pending confirm-write modal for the newly active tab
+    if (newTab.pendingConfirm) {
+        var pc = newTab.pendingConfirm;
+        newTab.pendingConfirm = null;
+        setTimeout(function() {
+            showConfirmWriteModal(pc.tool, pc.path, pc.sessionId);
+        }, 50);
+    }
+
+    // Focus input
+    setTimeout(function() { userInput.focus(); }, 50);
+}
+
+function closeTab(uiId) {
+    if (tabs.length <= 1) return; // Can't close last tab
+
+    var tab = getTab(uiId);
+    if (!tab) return;
+
+    // Stop any running task on this tab
+    if (tab.dbId) {
+        try { window.pywebview.api.stop_task(tab.dbId); } catch(e) {}
+    }
+    if (tab.pollingTimer) {
+        clearInterval(tab.pollingTimer);
+        tab.pollingTimer = null;
+    }
+
+    // Remove panels from DOM using stored reference
+    if (tab.panelsEl) {
+        tab.panelsEl.remove();
+    }
+
+    // Remove from tabs array
+    var idx = -1;
+    for (var i = 0; i < tabs.length; i++) {
+        if (tabs[i].uiId === uiId) { idx = i; break; }
+    }
+    if (idx >= 0) tabs.splice(idx, 1);
+
+    // Close backend session
+    if (tab.dbId) {
+        try { window.pywebview.api.close_session(tab.dbId); } catch(e) {}
+    }
+
+    // Switch to another tab if closing the active one
+    if (activeTabId === uiId) {
+        switchToTab(tabs[0].uiId);
+    }
+
+    updateTabBar();
+}
+
+function updateTabBar() {
+    var list = document.getElementById('tab-list');
+    if (!list) return;
+
+    var html = '';
+    for (var i = 0; i < tabs.length; i++) {
+        var t = tabs[i];
+        var isActive = t.uiId === activeTabId;
+        var cls = isActive ? 'tab-btn active' : 'tab-btn';
+        var tooltip = t.title;
+        if (t.workspace) {
+            tooltip += ' \u2014 ' + t.workspace;
+        }
+        html += '<div class="' + cls + '" data-tab="' + t.uiId + '" title="' + escapeHtml(tooltip) + '">';
+        if (t.isStreaming) {
+            html += '<span class="tab-running-dot"></span>';
+        }
+        if (t.pendingQuestion) {
+            html += '<span class="tab-ask-dot" title="Agent is asking a question — click to view"></span>';
+        }
+        if (t.pendingConfirm) {
+            html += '<span class="tab-confirm-dot" title="Agent needs write confirmation — click to view"></span>';
+        }
+        // Show workspace icon if set
+        if (t.workspace) {
+            html += '<span class="tab-ws-icon" title="' + escapeHtml(t.workspace) + '">📁</span>';
+        }
+        html += '<span class="tab-title">' + escapeHtml(t.title) + '</span>';
+        if (tabs.length > 1) {
+            html += '<span class="tab-close" data-close="' + t.uiId + '">×</span>';
+        }
+        html += '</div>';
+    }
+    list.innerHTML = html;
+
+    // Attach event listeners
+    var tabBtns = list.querySelectorAll('.tab-btn');
+    for (var j = 0; j < tabBtns.length; j++) {
+        tabBtns[j].addEventListener('click', function(e) {
+            var closeBtn = e.target.closest('.tab-close');
+            if (closeBtn) {
+                e.stopPropagation();
+                closeTab(closeBtn.dataset.close);
+                return;
+            }
+            var tabId = this.dataset.tab;
+            if (tabId !== activeTabId) {
+                switchToTab(tabId);
+            }
+        });
+
+        // Double-click to rename
+        tabBtns[j].addEventListener('dblclick', function(e) {
+            var closeBtn = e.target.closest('.tab-close');
+            if (closeBtn) return;
+            var tabId = this.dataset.tab;
+            var tab = getTab(tabId);
+            if (!tab) return;
+            var newTitle = prompt('Rename tab:', tab.title);
+            if (newTitle && newTitle.trim()) {
+                tab.title = newTitle.trim();
+                updateTabBar();
+                if (tab.dbId) {
+                    try { window.pywebview.api.set_session_title(tab.dbId, tab.title); } catch(e) {}
+                }
+            }
+        });
+
+        // Right-click context menu for workspace
+        tabBtns[j].addEventListener('contextmenu', function(e) {
+            e.preventDefault();
+            var tabId = this.dataset.tab;
+            var tab = getTab(tabId);
+            if (!tab) return;
+            showTabContextMenu(e, tab);
+        });
+    }
+}
+
+// ── Tab context menu (right-click) ──
+var tabContextMenu = null;
+
+function createTabContextMenu() {
+    if (tabContextMenu) return;
+    tabContextMenu = document.createElement('div');
+    tabContextMenu.id = 'tab-context-menu';
+    tabContextMenu.style.cssText = 'display:none;position:fixed;z-index:5000;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.15);padding:4px 0;min-width:180px;font-size:12px;';
+    tabContextMenu.innerHTML = '<div class="ctx-item" data-action="workspace" style="padding:6px 14px;cursor:pointer;color:#333;">📁 Set Workspace...</div>' +
+        '<div class="ctx-item" data-action="rename" style="padding:6px 14px;cursor:pointer;color:#333;">✏️ Rename Tab</div>' +
+        '<div class="ctx-item" data-action="close" style="padding:6px 14px;cursor:pointer;color:#dc3545;">✕ Close Tab</div>';
+    document.body.appendChild(tabContextMenu);
+
+    tabContextMenu.addEventListener('click', function(e) {
+        var item = e.target.closest('.ctx-item');
+        if (!item) return;
+        var action = item.dataset.action;
+        var tabId = tabContextMenu._targetTab;
+        hideTabContextMenu();
+        if (!tabId) return;
+        var tab = getTab(tabId);
+        if (!tab) return;
+
+        if (action === 'workspace') {
+            promptTabWorkspace(tab);
+        } else if (action === 'rename') {
+            var newTitle = prompt('Rename tab:', tab.title);
+            if (newTitle && newTitle.trim()) {
+                tab.title = newTitle.trim();
+                updateTabBar();
+                if (tab.dbId) {
+                    try { window.pywebview.api.set_session_title(tab.dbId, tab.title); } catch(e) {}
+                }
+            }
+        } else if (action === 'close') {
+            if (tabs.length > 1) closeTab(tab.uiId);
+        }
+    });
+
+    // Close on outside click
+    document.addEventListener('click', function(e) {
+        if (tabContextMenu && !tabContextMenu.contains(e.target)) {
+            hideTabContextMenu();
+        }
+    });
+}
+
+function showTabContextMenu(e, tab) {
+    createTabContextMenu();
+    tabContextMenu._targetTab = tab.uiId;
+    tabContextMenu.style.display = 'block';
+    tabContextMenu.style.left = e.clientX + 'px';
+    tabContextMenu.style.top = e.clientY + 'px';
+    // Make sure it's in viewport
+    var rect = tabContextMenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) tabContextMenu.style.left = (e.clientX - rect.width) + 'px';
+    if (rect.bottom > window.innerHeight) tabContextMenu.style.top = (e.clientY - rect.height) + 'px';
+}
+
+function hideTabContextMenu() {
+    if (tabContextMenu) {
+        tabContextMenu.style.display = 'none';
+        tabContextMenu._targetTab = null;
+    }
+}
+
+// ── Per-tab workspace ──
+async function promptTabWorkspace(tab) {
+    var currentWs = tab.workspace || config.project_root || '';
+    var newWs = null;
+    
+    // Try native directory picker first (acts as "Browse" button)
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.pick_directory) {
+        try {
+            newWs = await window.pywebview.api.pick_directory();
+            if (newWs) newWs = newWs.trim();
+        } catch(e) {
+            console.warn('pick_directory failed:', e);
+            newWs = null;
+        }
+    }
+    
+    // Fall back to text prompt if native picker unavailable or cancelled
+    if (!newWs) {
+        var hint = currentWs ? ' (current: ' + currentWs + ')' : '';
+        newWs = prompt('Enter workspace path for this tab' + hint + ':', currentWs);
+        if (newWs === null) return; // cancelled
+        newWs = (newWs || '').trim();
+    }
+    
+    tab.workspace = newWs;
+    updateTabBar();
+    
+    if (tab.dbId) {
+        try {
+            await window.pywebview.api.set_session_workspace(tab.dbId, newWs);
+        } catch(e) {
+            console.warn('Failed to set workspace:', e);
+        }
+    }
+    if (newWs) {
+        showToast('📁 Workspace: ' + newWs);
+    }
+}
+// ── Global state (some per-tab, some shared) ──
 var isWaiting = false;
 var isStreaming = false;
-var pollingTimer = null;
 var config = {};
 var currentThinkingEl = null;
 var currentReplyEl = null;
 var currentCmdEl = null;
-var totalTokens = { input: 0, output: 0, tool: 0 };
-
 var selectedFiles = [];
 
-var chatContent = document.getElementById('chat-content');
-var cmdContent = document.getElementById('cmd-content');
+// Default content refs point to the default panel — updated by switchToTab()
+var chatContent = document.getElementById('chat-content-default');
+var cmdContent = document.getElementById('cmd-content-default');
+
 var userInput = document.getElementById('user-input');
 var sendBtn = document.getElementById('send-btn');
 var stopBtn = document.getElementById('stop-btn');
@@ -2593,6 +3190,9 @@ var confirmWriteMessage = document.getElementById('confirm-write-message');
 var confirmWriteDetail = document.getElementById('confirm-write-detail');
 var confirmWriteConfirmBtn = document.getElementById('confirm-write-confirm-btn');
 var confirmWriteCancelBtn = document.getElementById('confirm-write-cancel-btn');
+var _pendingConfirmSessionId = '';
+var _pendingAskSessionId = '';
+var _pendingAskQuestionRaw = '';
 
 function showToast(msg, duration) {
     duration = duration || 2000;
@@ -2604,29 +3204,47 @@ function showToast(msg, duration) {
     setTimeout(function() { div.classList.remove('show'); setTimeout(function() { div.remove(); }, 300); }, duration);
 }
 
-function updateTokenDisplay(usage) {
+function updateTokenDisplay(usage, optTab) {
+    var tab = optTab || getActiveTab();
+    if (!tab) return;
     if (usage) {
-        if (usage.input_tokens !== undefined) totalTokens.input = usage.input_tokens;
-        if (usage.output_tokens !== undefined) totalTokens.output = usage.output_tokens;
-        if (usage.tool_call_tokens !== undefined) totalTokens.tool = usage.tool_call_tokens;
+        if (usage.input_tokens !== undefined) tab.totalTokens.input = usage.input_tokens;
+        if (usage.output_tokens !== undefined) tab.totalTokens.output = usage.output_tokens;
+        if (usage.tool_call_tokens !== undefined) tab.totalTokens.tool = usage.tool_call_tokens;
     }
 
-    var grandTotal = totalTokens.input + totalTokens.output + totalTokens.tool;
+    // Only update the global token display if this is the active tab
+    if (tab.uiId !== activeTabId) return;
+
+    var grandTotal = tab.totalTokens.input + tab.totalTokens.output + tab.totalTokens.tool;
     if (grandTotal <= 0) return;
 
     var parts = [];
-    if (totalTokens.input > 0)
-        parts.push('<span class="tok-in">' + totalTokens.input.toLocaleString() + '</span> in');
-    if (totalTokens.output > 0)
-        parts.push('<span class="tok-out">' + totalTokens.output.toLocaleString() + '</span> out');
-    if (totalTokens.tool > 0)
-        parts.push('<span class="tok-tool">' + totalTokens.tool.toLocaleString() + '</span> tool');
+    if (tab.totalTokens.input > 0)
+        parts.push('<span class="tok-in">' + tab.totalTokens.input.toLocaleString() + '</span> in');
+    if (tab.totalTokens.output > 0)
+        parts.push('<span class="tok-out">' + tab.totalTokens.output.toLocaleString() + '</span> out');
+    if (tab.totalTokens.tool > 0)
+        parts.push('<span class="tok-tool">' + tab.totalTokens.tool.toLocaleString() + '</span> tool');
     parts.push('= <span class="tok-total">' + grandTotal.toLocaleString() + '</span>');
     tokenDisplay.innerHTML = 'Tokens: ' + parts.join(' + ');
 }
 
+function updateWorkspaceDisplay(workspace) {
+    var el = document.getElementById('workspace-display');
+    if (!el) return;
+    if (workspace) {
+        el.textContent = '📁 ' + workspace;
+        el.style.display = 'inline';
+    } else {
+        el.textContent = '';
+        el.style.display = 'none';
+    }
+}
+
 function resetTokenDisplay() {
-    totalTokens = { input: 0, output: 0, tool: 0 };
+    var tab = getActiveTab();
+    if (tab) tab.totalTokens = { input: 0, output: 0, tool: 0 };
     tokenDisplay.innerHTML = '';
 }
 
@@ -2837,7 +3455,10 @@ function renderContent(text) {
     }
 }
 
-chatContent.addEventListener('click', function(e) {
+document.addEventListener('click', function(e) {
+    // Only handle clicks inside panel-content areas
+    if (!e.target.closest('.panel-content')) return;
+
     var copyBtn = e.target.closest('.copy-btn');
     if (copyBtn) {
         e.preventDefault(); e.stopPropagation();
@@ -2943,14 +3564,17 @@ function appendAskUser(question) {
     scrollChatToBottom();
 }
 
-function showAskUserModal(question) {
+function showAskUserModal(question, sessionId) {
     hideConfirmWriteModal();
+    _pendingAskQuestionRaw = question;
     askUserQuestion.innerHTML = renderContent(question);
     askUserReplyInput.value = '';
     askUserReplyInput.style.height = 'auto';
     askUserModal.style.display = 'block';
     askUserReplyInput.focus();
     statusText.textContent = t('waiting_reply');
+    // Use explicit sessionId if provided (from background tab), otherwise active tab
+    _pendingAskSessionId = sessionId || (getActiveTab() ? getActiveTab().dbId : '');
 }
 
 function hideAskUserModal() {
@@ -2968,9 +3592,13 @@ async function handleAskUserReply() {
     scrollChatToBottom();
 
     hideAskUserModal();
+    _pendingAskQuestionRaw = '';
+    updateTabBar();
 
     try {
-        await window.pywebview.api.provide_user_input(text);
+        var sid = _pendingAskSessionId || (getActiveTab() ? getActiveTab().dbId : '');
+        _pendingAskSessionId = '';
+        await window.pywebview.api.provide_user_input(sid, text);
     } catch(e) {
         appendError(t('reply') + ' ' + t('save_failed') + ': ' + e.message);
         finishStream();
@@ -2979,10 +3607,18 @@ async function handleAskUserReply() {
 
 async function handleAskUserCancel() {
     hideAskUserModal();
+    _pendingAskQuestionRaw = '';
+    updateTabBar();
     appendError(t('task_cancelled'));
-    try { await window.pywebview.api.stop_task(); } catch(e) {}
-    if (pollingTimer) clearInterval(pollingTimer);
-    pollingTimer = null;
+    var sid = _pendingAskSessionId || (getActiveTab() ? getActiveTab().dbId : '');
+    _pendingAskSessionId = '';
+    try { await window.pywebview.api.stop_task(sid); } catch(e) {}
+    // Clear the per-tab polling timer
+    var tab = getActiveTab();
+    if (tab && tab.pollingTimer) {
+        clearInterval(tab.pollingTimer);
+        tab.pollingTimer = null;
+    }
     finishStream();
 }
 
@@ -2992,7 +3628,7 @@ var TOOL_NAMES_EN = {
     'replace_in_file': 'Modify'
 };
 
-function showConfirmWriteModal(tool, path) {
+function showConfirmWriteModal(tool, path, sessionId) {
     hideAskUserModal();
     var action = TOOL_NAMES_EN[tool] || tool;
     confirmWriteMessage.textContent = tf('confirm_write_msg', null, action.toLowerCase(), path);
@@ -3001,6 +3637,7 @@ function showConfirmWriteModal(tool, path) {
         : t('confirm_overwrite_warn');
     confirmWriteModal.style.display = 'block';
     statusText.textContent = t('waiting_confirm');
+    _pendingConfirmSessionId = sessionId || (getActiveTab() ? getActiveTab().dbId : '');
 }
 function hideConfirmWriteModal() {
     confirmWriteModal.style.display = 'none';
@@ -3012,7 +3649,9 @@ async function handleConfirmWriteConfirm() {
     hideConfirmWriteModal();
     statusText.textContent = t('running');
     try {
-        await window.pywebview.api.provide_user_input('__confirm__');
+        var sid = _pendingConfirmSessionId || (getActiveTab() ? getActiveTab().dbId : '');
+        _pendingConfirmSessionId = '';
+        await window.pywebview.api.provide_user_input(sid, '__confirm__');
     } catch(e) {
         appendError(t('confirm_btn') + ' ' + t('save_failed') + ': ' + e.message);
         finishStream();
@@ -3023,7 +3662,9 @@ async function handleConfirmWriteCancel() {
     hideConfirmWriteModal();
     statusText.textContent = t('running');
     try {
-        await window.pywebview.api.provide_user_input('__cancel__');
+        var sid = _pendingConfirmSessionId || (getActiveTab() ? getActiveTab().dbId : '');
+        _pendingConfirmSessionId = '';
+        await window.pywebview.api.provide_user_input(sid, '__cancel__');
     } catch(e) {
         appendError(t('cancel') + ' ' + t('save_failed') + ': ' + e.message);
         finishStream();
@@ -3115,6 +3756,7 @@ function appendOrAccumulateCommand(text) {
 }
 
 function flushAccumulated() {
+    finalizeCurrentThinking();
     if (currentReplyEl && currentReplyEl._inner) {
         if (currentReplyEl._copyBtn) {
             currentReplyEl._copyBtn.style.display = 'inline-block';
@@ -3125,10 +3767,31 @@ function flushAccumulated() {
     currentCmdEl = null;
 }
 
-function handleEvent(event) {
+function finalizeCurrentThinking() {
+    // Keep thinking expanded by default so user can always see reasoning.
+    if (currentThinkingEl) {
+        // Update summary to indicate this phase is complete
+        var sum = currentThinkingEl.querySelector('summary');
+        if (sum) sum.textContent = '\u2705 ' + t('thinking');
+        currentThinkingEl = null;
+    }
+}
+
+function handleEvent(event, tab) {
+    // tab is optional — when called from handleEventForTab (background tab),
+    // it provides the correct tab context for token display and modals.
     if (event.indexOf('T:') === 0) {
+        // If reply already started and new thinking arrives,
+        // finalize the *previous* thinking block first.
+        if (currentReplyEl && currentThinkingEl) {
+            finalizeCurrentThinking();
+        }
         appendOrAccumulateThinking(event.slice(2));
     } else if (event.indexOf('R:') === 0) {
+        // First output chunk → finalize the preceding thinking block
+        if (!currentReplyEl) {
+            finalizeCurrentThinking();
+        }
         appendOrAccumulateReply(event.slice(2));
     } else if (event.indexOf('C:') === 0) {
         flushAccumulated();
@@ -3136,11 +3799,14 @@ function handleEvent(event) {
     } else if (event.indexOf('U:') === 0) {
         try {
             var usage = JSON.parse(event.slice(2));
-            updateTokenDisplay(usage);
+            updateTokenDisplay(usage, tab);
         } catch(e) {}
     } else if (event.indexOf('E:') === 0) {
         flushAccumulated();
         appendError(event.slice(2));
+    } else if (event.indexOf('F:') === 0) {
+        // Backend requests explicit flush of current thinking block
+        finalizeCurrentThinking();
     } else if (event.indexOf('WC:') === 0) {
         flushAccumulated();
         var confirmData;
@@ -3149,7 +3815,16 @@ function handleEvent(event) {
         } catch(e) {
             confirmData = { tool: 'write_file', path: '' };
         }
-        showConfirmWriteModal(confirmData.tool, confirmData.path);
+        var wcSessionId = tab ? tab.dbId : (getActiveTab() ? getActiveTab().dbId : '');
+        // Only show modal if this is the active tab; otherwise defer until user switches
+        if (tab && tab.uiId === activeTabId) {
+            showConfirmWriteModal(confirmData.tool, confirmData.path, wcSessionId);
+        } else if (tab) {
+            // Background tab — store confirm request and show indicator
+            tab.pendingConfirm = { tool: confirmData.tool, path: confirmData.path, sessionId: wcSessionId };
+            tab.isWaiting = true;
+            updateTabBar();
+        }
     } else if (event.indexOf('Q:') === 0) {
         flushAccumulated();
         var question;
@@ -3159,8 +3834,18 @@ function handleEvent(event) {
             question = event.slice(2);
         }
         appendAskUser(question);
-        showAskUserModal(question);
+        var qSessionId = tab ? tab.dbId : (getActiveTab() ? getActiveTab().dbId : '');
+        // Only show modal if this is the active tab; otherwise defer until user switches
+        if (tab && tab.uiId === activeTabId) {
+            showAskUserModal(question, qSessionId);
+        } else if (tab) {
+            // Background tab — store question and show blue indicator
+            tab.pendingQuestion = { text: question, sessionId: qSessionId };
+            tab.isWaiting = true;
+            updateTabBar();
+        }
     } else if (event.indexOf('D:') === 0) {
+        finalizeCurrentThinking();
         var directText = event.slice(2);
         if (currentReplyEl && currentReplyEl._inner) {
             if (currentReplyEl._copyBtn) {
@@ -3189,25 +3874,93 @@ function handleEvent(event) {
     }
 }
 
-function startPolling() {
-    if (pollingTimer) clearInterval(pollingTimer);
+// ── Per-tab event handler: swaps globals so background tabs can render ──
+function handleEventForTab(tab, event) {
+    // Save current global context
+    var savedChat = chatContent;
+    var savedCmd = cmdContent;
+    var savedThink = currentThinkingEl;
+    var savedReply = currentReplyEl;
+    var savedCmdEl = currentCmdEl;
+
+    // Switch to tab's DOM context
+    chatContent = tab.chatContent;
+    cmdContent = tab.cmdContent;
+    currentThinkingEl = tab.currentThinkingEl || null;
+    currentReplyEl = tab.currentReplyEl || null;
+    currentCmdEl = tab.currentCmdEl || null;
+
+    // Process the event with the tab's context
+    handleEvent(event, tab);
+
+    // Save back tab's streaming state
+    tab.currentThinkingEl = currentThinkingEl;
+    tab.currentReplyEl = currentReplyEl;
+    tab.currentCmdEl = currentCmdEl;
+
+    // Restore active tab's global context
+    var active = getActiveTab();
+    if (active && active.uiId !== tab.uiId) {
+        chatContent = savedChat;
+        cmdContent = savedCmd;
+        currentThinkingEl = savedThink;
+        currentReplyEl = savedReply;
+        currentCmdEl = savedCmdEl;
+    }
+    // If the processed tab IS the active tab, leave the new globals in place
+}
+
+function startPolling(tab) {
+    if (!tab) return;
+    // Clear any existing timer for this tab first
+    if (tab.pollingTimer) clearInterval(tab.pollingTimer);
+
     resetTokenDisplay();
-    pollingTimer = setInterval(async function() {
+
+    var tabId = tab.uiId;
+    var sid = tab.dbId;
+
+    tab.pollingTimer = setInterval(async function() {
         try {
-            var event = await window.pywebview.api.get_next_event();
+            var t = getTab(tabId);
+            // Tab was closed — clean up
+            if (!t || !t.dbId) {
+                clearInterval(tab.pollingTimer);
+                return;
+            }
+
+            var event = await window.pywebview.api.get_next_event(sid);
             if (event === null) {
-                clearInterval(pollingTimer);
-                pollingTimer = null;
-                finishStream();
+                // Stream finished
+                clearInterval(t.pollingTimer);
+                t.pollingTimer = null;
+                t.isStreaming = false;
+                t.isWaiting = false;
+
+                if (getActiveTab() && getActiveTab().uiId === tabId) {
+                    finishStream();
+                }
+                updateTabBar();
                 return;
             }
             if (event === 'WAIT') return;
-            handleEvent(event);
+
+            // ALWAYS process events — even for background tabs.
+            // handleEventForTab swaps DOM context so rendering goes to the right panel.
+            handleEventForTab(t, event);
         } catch(e) {
-            clearInterval(pollingTimer);
-            pollingTimer = null;
-            finishStream();
-            appendError('Polling error: ' + e.message);
+            var t2 = getTab(tabId);
+            if (t2) {
+                clearInterval(t2.pollingTimer);
+                t2.pollingTimer = null;
+                t2.isStreaming = false;
+                t2.isWaiting = false;
+
+                if (getActiveTab() && getActiveTab().uiId === tabId) {
+                    finishStream();
+                    appendError('Polling error: ' + e.message);
+                }
+            }
         }
     }, 50);
 }
@@ -3218,10 +3971,21 @@ function finishStream() {
     hideConfirmWriteModal();
     isStreaming = false;
     isWaiting = false;
+    var tab = getActiveTab();
+    if (tab) {
+        tab.isStreaming = false;
+        tab.isWaiting = false;
+        // Clear this tab's polling timer if still running
+        if (tab.pollingTimer) {
+            clearInterval(tab.pollingTimer);
+            tab.pollingTimer = null;
+        }
+    }
     stopBtn.style.display = 'none';
     sendBtn.style.display = 'inline-block';
     statusText.textContent = t('ready');
     resetTextareaHeight();
+    updateTabBar();
     userInput.focus();
 }
 
@@ -3293,6 +4057,8 @@ async function readFileAsDataURL(file) {
 
 async function handleFiles(fileList) {
     var added = 0;
+    var tab = getActiveTab();
+    if (!tab) return;
     for (var i = 0; i < fileList.length; i++) {
         var file = fileList[i];
         if (file.size > 10 * 1024 * 1024) {
@@ -3306,7 +4072,8 @@ async function handleFiles(fileList) {
         }
         try {
             var data = await readFileAsDataURL(file);
-            selectedFiles.push({ name: file.name, size: file.size, type: ext, data: data });
+            if (!tab.selectedFiles) tab.selectedFiles = [];
+            tab.selectedFiles.push({ name: file.name, size: file.size, type: ext, data: data });
             added++;
         } catch(err) {
             showToast(t('read_error') + ': ' + file.name + ' - ' + err.message);
@@ -3320,13 +4087,15 @@ async function handleFiles(fileList) {
 }
 
 function updateFileBadges() {
-    if (selectedFiles.length === 0) {
+    var tab = getActiveTab();
+    var files = tab ? (tab.selectedFiles || []) : [];
+    if (files.length === 0) {
         fileBadges.innerHTML = '';
         return;
     }
     var html = '';
-    for (var i = 0; i < selectedFiles.length; i++) {
-        var f = selectedFiles[i];
+    for (var i = 0; i < files.length; i++) {
+        var f = files[i];
         html += '<span class="file-badge"><span class="badge-remove-row"><span class="remove" data-index="' + i + '" title="Remove">✕</span></span><span class="badge-name">📄 ' + f.name + '</span><span class="badge-size">' + formatSize(f.size) + '</span></span>';
     }
     fileBadges.innerHTML = html;
@@ -3336,9 +4105,12 @@ function updateFileBadges() {
         removes[j].addEventListener('click', function(e) {
             e.stopPropagation();
             var idx = parseInt(this.dataset.index);
-            selectedFiles.splice(idx, 1);
-            updateFileBadges();
-            showToast(t('file_removed'));
+            var t = getActiveTab();
+            if (t && t.selectedFiles) {
+                t.selectedFiles.splice(idx, 1);
+                updateFileBadges();
+                showToast(t('file_removed'));
+            }
         });
     }
 }
@@ -3380,7 +4152,9 @@ document.addEventListener('paste', function(e) {
 
 async function loadHistory() {
     try {
-        var history = await window.pywebview.api.get_initial_messages();
+        var tab = getActiveTab();
+        if (!tab) return;
+        var history = await window.pywebview.api.get_initial_messages(tab.dbId);
         if (history && history.length) {
             for (var i = 0; i < history.length; i++) {
                 var msg = history[i];
@@ -3411,7 +4185,7 @@ async function loadHistory() {
             scrollChatToBottom();
         }
         try {
-            var memoryContent = await window.pywebview.api.get_memory_content();
+            var memoryContent = await window.pywebview.api.get_memory_content(tab.dbId);
             if (memoryContent) {
                 var memDiv = document.createElement('div');
                 memDiv.className = 'message assistant-msg';
@@ -3433,7 +4207,10 @@ async function loadHistory() {
 
 async function handleSend() {
     var text = userInput.value.trim();
-    if (selectedFiles.length === 0 && !text) {
+    var tab = getActiveTab();
+    if (!tab) return;
+    var currentFiles = tab.selectedFiles || [];
+    if (currentFiles.length === 0 && !text) {
         showToast(t('enter_text_or_file'));
         return;
     }
@@ -3459,10 +4236,10 @@ async function handleSend() {
     userInner.className = 'user-text';
     var userHtml = '';
 
-    if (selectedFiles.length > 0) {
+    if (currentFiles.length > 0) {
         userHtml += '<div class="file-list">';
-        for (var i = 0; i < selectedFiles.length; i++) {
-            var f = selectedFiles[i];
+        for (var i = 0; i < currentFiles.length; i++) {
+            var f = currentFiles[i];
             var icon = getFileIcon(f.type);
             userHtml += '<div class="file-card"><div class="file-name"><span class="file-icon">' + icon + '</span>' + f.name + '</div><div class="file-meta">' + formatSize(f.size) + ' <span style="background:#e8e8e8;padding:0 4px;border-radius:2px;font-size:10px;">.' + f.type + '</span></div></div>';
         }
@@ -3476,19 +4253,22 @@ async function handleSend() {
     chatContent.appendChild(userDiv);
     scrollChatToBottom();
 
-    var filesToSend = selectedFiles.map(function(f) {
+    var filesToSend = currentFiles.map(function(f) {
         return { name: f.name, size: f.size, type: f.type, data: f.data };
     });
-    selectedFiles = [];
+    tab.selectedFiles = [];
     updateFileBadges();
     userInput.value = '';
     resetTextareaHeight();
 
     isWaiting = true;
     isStreaming = true;
+    tab.isWaiting = true;
+    tab.isStreaming = true;
     sendBtn.style.display = 'none';
     stopBtn.style.display = 'inline-block';
     statusText.textContent = t('running');
+    updateTabBar();
 
     try {
         var uploadedFiles = [];
@@ -3511,13 +4291,14 @@ async function handleSend() {
             }
         }
 
-        var result = await window.pywebview.api.send_message(fullMessage);
+        var sid = tab.dbId;
+        var result = await window.pywebview.api.send_message(sid, fullMessage);
         if (result && result.indexOf('error:') === 0) {
             appendError(result.slice(6));
             finishStream();
             return;
         }
-        startPolling();
+        startPolling(tab);
     } catch(e) {
         appendError(t('send_failed') + ': ' + e.message);
         finishStream();
@@ -3526,11 +4307,15 @@ async function handleSend() {
 
 async function handleStop() {
     try {
-        await window.pywebview.api.stop_task();
+        var tab = getActiveTab();
+        var sid = tab ? tab.dbId : '';
+        await window.pywebview.api.stop_task(sid);
         hideAskUserModal();
         hideConfirmWriteModal();
-        if (pollingTimer) clearInterval(pollingTimer);
-        pollingTimer = null;
+        if (tab && tab.pollingTimer) {
+            clearInterval(tab.pollingTimer);
+            tab.pollingTimer = null;
+        }
         finishStream();
         showToast(t('task_stopped'));
     } catch(e) {
@@ -3558,20 +4343,8 @@ askUserReplyInput.addEventListener('keydown', function(e) {
     }
 });
 
-askUserModal.addEventListener('click', function(e) {
-    if (e.target === askUserModal) {
-        handleAskUserCancel();
-    }
-});
-
 confirmWriteConfirmBtn.addEventListener('click', handleConfirmWriteConfirm);
 confirmWriteCancelBtn.addEventListener('click', handleConfirmWriteCancel);
-
-confirmWriteModal.addEventListener('click', function(e) {
-    if (e.target === confirmWriteModal) {
-        handleConfirmWriteCancel();
-    }
-});
 
 document.addEventListener('keydown', function(e) {
     if (confirmWriteModal.style.display === 'block') {
@@ -4054,7 +4827,9 @@ document.getElementById('clear-memory-btn').addEventListener('click', async func
         return;
     }
     try {
-        var result = await window.pywebview.api.clear_memory();
+        var tab = getActiveTab();
+        var sid = tab ? tab.dbId : '';
+        var result = await window.pywebview.api.clear_memory(sid);
         if (result) {
             document.getElementById('memory-status').textContent = t('memory_cleared');
             showToast(t('memory_cleared'));
@@ -4588,6 +5363,19 @@ window.addEventListener('pywebviewready', async function() {
         // Apply saved language
         currentLang = config.language || 'zh_CN';
         setLanguage(currentLang);
+
+        // ── Initialize first tab ──
+        // Create backend session and set up the frontend tab
+        var firstSessionId = await window.pywebview.api.create_session(config.project_root || '');
+        var firstTab = createTab(firstSessionId, 'Tab 1', true, true, config.project_root || '');
+        // Make default panels visible
+        var defaultPanels = document.getElementById('panels-container');
+        if (defaultPanels) defaultPanels.classList.add('visible');
+        // Update global refs
+        chatContent = firstTab.chatContent;
+        cmdContent = firstTab.cmdContent;
+        activeTabId = firstTab.uiId;
+
         var isFirst = await window.pywebview.api.is_first_run();
         if (isFirst) {
             bindWizardEvents();
@@ -4601,12 +5389,88 @@ window.addEventListener('pywebviewready', async function() {
             userInput.disabled = false;
             userInput.focus();
         }
+
+        // ── Tab keyboard shortcuts ──
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.key === 't') {
+                e.preventDefault();
+                createNewTab();
+            }
+            if (e.ctrlKey && e.key === 'w') {
+                e.preventDefault();
+                var activeTab = getActiveTab();
+                if (activeTab && tabs.length > 1) {
+                    closeTab(activeTab.uiId);
+                }
+            }
+            // Ctrl+Tab / Ctrl+Shift+Tab for tab switching
+            if (e.ctrlKey && e.key === 'Tab') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    switchToPrevTab();
+                } else {
+                    switchToNextTab();
+                }
+            }
+        });
+
+        // New tab button
+        document.getElementById('new-tab-btn').addEventListener('click', createNewTab);
+
     } catch(e) {
         config = {};
         userInput.disabled = false;
         userInput.focus();
     }
 });
+
+async function createNewTab() {
+    if (tabs.length >= MAX_TABS) {
+        showToast('⚠️ Maximum ' + MAX_TABS + ' tabs reached');
+        return;
+    }
+    var sid;
+    try {
+        // Use current config's project_root as default workspace
+        var defaultWs = config.project_root || '';
+        sid = await window.pywebview.api.create_session(defaultWs);
+        if (sid && sid.indexOf('error:') === 0) {
+            showToast(sid.replace('error:', ''));
+            return;
+        }
+    } catch(e) {
+        sid = 'session_' + Date.now();
+    }
+    var idx = tabs.length + 1;
+    var defaultWs = config.project_root || '';
+    createTab(sid, 'Tab ' + idx, true, false, defaultWs);
+    // Reset for new tab
+    updateFileBadges();
+    tokenDisplay.innerHTML = '';
+    userInput.value = '';
+    resetTextareaHeight();
+    userInput.focus();
+}
+
+function switchToNextTab() {
+    if (tabs.length < 2) return;
+    var idx = -1;
+    for (var i = 0; i < tabs.length; i++) {
+        if (tabs[i].uiId === activeTabId) { idx = i; break; }
+    }
+    var next = (idx + 1) % tabs.length;
+    switchToTab(tabs[next].uiId);
+}
+
+function switchToPrevTab() {
+    if (tabs.length < 2) return;
+    var idx = -1;
+    for (var i = 0; i < tabs.length; i++) {
+        if (tabs[i].uiId === activeTabId) { idx = i; break; }
+    }
+    var prev = (idx - 1 + tabs.length) % tabs.length;
+    switchToTab(tabs[prev].uiId);
+}
 
 window.onerror = function(message, source, lineno, colno, error) {
     var msg = 'JS Error: ' + message + ' at ' + source + ':' + lineno + ':' + colno;

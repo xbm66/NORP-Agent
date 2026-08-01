@@ -621,6 +621,7 @@ class AgentLoop:
             _last_ts_fire = 0.0
             _reasoning_buf = ""
             _content_buf = ""
+            _output_started = False  # track when output starts to flush thinking
 
             for chunk in stream:
                 if self._stop_event.is_set():
@@ -655,6 +656,10 @@ class AgentLoop:
                     self.event_queue.put(f"T:{delta.reasoning_content}")
                     _reasoning_buf += delta.reasoning_content
                 if hasattr(delta, 'content') and delta.content:
+                    # First output chunk → tell front-end to finalize thinking block
+                    if not _output_started:
+                        _output_started = True
+                        self.event_queue.put("F:")
                     content_parts.append(delta.content)
                     self.event_queue.put(f"R:{delta.content}")
                     _content_buf += delta.content
@@ -990,6 +995,7 @@ class AgentLoop:
             _last_ts_fire = 0.0
             _reasoning_buf = ""
             _content_buf = ""
+            _output_started = False  # track when output starts to flush thinking
 
             for event in stream:
                 if self._stop_event.is_set():
@@ -1004,6 +1010,10 @@ class AgentLoop:
                     _reasoning_buf += delta
                 elif et == "response.output_text.delta":
                     delta = getattr(event, "delta", "") or ""
+                    # First output chunk → tell front-end to finalize thinking block
+                    if not _output_started:
+                        _output_started = True
+                        self.event_queue.put("F:")
                     content_parts.append(delta)
                     self.event_queue.put(f"R:{delta}")
                     _content_buf += delta
@@ -1342,7 +1352,9 @@ class AgentLoop:
         usage = None                
 
         _current_thinking_text = ""  
-        _current_thinking_sig = ""   
+        _current_thinking_sig = ""
+
+        _output_started = False  # track when output starts to flush thinking
 
         call_params = {
             "model": self.model,
@@ -1394,6 +1406,10 @@ class AgentLoop:
                         if hasattr(delta, 'signature') and delta.signature:
                             _current_thinking_sig = delta.signature
                         if hasattr(delta, 'text') and delta.text:
+                            # First output chunk → tell front-end to finalize thinking block
+                            if not _output_started:
+                                _output_started = True
+                                self.event_queue.put("F:")
                             content_parts.append(delta.text)
                             self.event_queue.put(f"R:{delta.text}")
                             _content_buf += delta.text

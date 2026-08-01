@@ -53,6 +53,13 @@ class ConfigManager:
             "plugin_security_import_restrict": "off",
             "plugin_security_require_permissions": False,
             "plugin_security_resource_limit": False,
+
+            # 异步架构：沙箱池 & 文件IO队列
+            "sandbox_pool_max": 8,
+            "sandbox_network_enabled": False,
+            "file_io_queue_enabled": True,
+            "lifecycle_zombie_scan_seconds": 5,
+            "resource_terminal_reserved_pct": 40,
         }
 
     def load(self) -> Dict[str, Any]:
