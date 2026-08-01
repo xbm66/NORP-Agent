@@ -38,7 +38,7 @@ def main():
         html = load_frontend_html()
 
         window = webview.create_window(
-            title="NORP Vibe Coding Agent",
+            title="NORP Agent",
             html=html,
             width=1200,
             height=800,
