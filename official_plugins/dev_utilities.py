@@ -253,11 +253,23 @@ def _handle_generate_uuid(args: dict) -> str:
     results = []
     for _ in range(count):
         if version == 7:
-            # UUID7 — time-ordered UUID (Python 3.14+ has native; we simulate)
-            # Simple simulation using UUID4 + timestamp prefix
-            ts = int(time.time() * 1000)
-            u = uuid.uuid4()
-            results.append(f"{ts:016x}-{u.hex[16:]}")
+            # UUID7 per RFC 9562 – time-ordered UUID
+            # Structure: 48-bit Unix ts (ms) | 4-bit ver=7 | 12-bit rand
+            #             | 2-bit variant=10 | 62-bit random
+            ts = int(time.time() * 1000)  # 48-bit millisecond timestamp
+            ts_bytes = ts.to_bytes(6, 'big')  # 6 bytes = 48 bits
+            rand_bytes = os.urandom(10)
+
+            uuid_bytes = bytearray(16)
+            uuid_bytes[0:6] = ts_bytes
+            uuid_bytes[6:16] = rand_bytes
+
+            # Set version (7) in the top 4 bits of byte 6
+            uuid_bytes[6] = (uuid_bytes[6] & 0x0F) | 0x70
+            # Set variant (10xx) in the top 2 bits of byte 8
+            uuid_bytes[8] = (uuid_bytes[8] & 0x3F) | 0x80
+
+            results.append(str(uuid.UUID(bytes=bytes(uuid_bytes))))
         else:
             results.append(str(uuid.uuid4()))
 

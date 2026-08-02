@@ -8,6 +8,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict
@@ -92,6 +93,11 @@ class AsyncToolExecutor:
             workspace_root=self.project_root,
             extra_paths=extra_paths,
         )
+
+        # ★ 将沙箱的路径映射同步到本地 PathMapper（供无沙箱回退路径使用）
+        for host_path, sandbox_path in self._sandbox.path_map.items():
+            self.path_mapper.add_mapping(host_path, sandbox_path)
+
         return self._sandbox
 
     async def release_sandbox(self):
@@ -125,6 +131,8 @@ class AsyncToolExecutor:
             "task_done": self._task_done,
             "web_search": self._web_search,
             "open_file": self._open_file,
+            "read_clipboard": self._read_clipboard,
+            "write_clipboard": self._write_clipboard,
         }
 
         handler = handlers.get(tool_name)
@@ -153,6 +161,8 @@ class AsyncToolExecutor:
             "git_commit": Permission.PROCESS_SHELL,
             "open_file": Permission.PROCESS_EXEC,
             "web_search": Permission.NETWORK_OUT,
+            "read_clipboard": Permission.PROCESS_EXEC,
+            "write_clipboard": Permission.PROCESS_EXEC,
         }
 
         perm = perm_map.get(tool_name)
@@ -450,6 +460,106 @@ class AsyncToolExecutor:
         await asyncio.get_running_loop().run_in_executor(None, _open)
         return f"File opened: {path}"
 
+    async def _read_clipboard(self, args: dict) -> str:
+        """读取系统剪贴板文本。"""
+        def _read():
+            system = platform.system()
+            if system == "Windows":
+                try:
+                    result = subprocess.run(
+                        ["powershell", "-Command", "Get-Clipboard"],
+                        capture_output=True, text=True, timeout=10,
+                        creationflags=0x08000000 if platform.system() == "Windows" else 0,
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(result.stderr.strip())
+                    return result.stdout
+                except FileNotFoundError:
+                    # 回退：使用 clip 命令 + 临时文件
+                    import tempfile
+                    tmp = os.path.join(tempfile.gettempdir(), "_vibe_paste.txt")
+                    subprocess.run(
+                        ["powershell", "-Command", f"Get-Clipboard > '{tmp}'"],
+                        capture_output=True, timeout=10,
+                        creationflags=0x08000000,
+                    )
+                    try:
+                        with open(tmp, "r", encoding="utf-8", errors="replace") as f:
+                            return f.read()
+                    finally:
+                        try:
+                            os.remove(tmp)
+                        except Exception:
+                            pass
+            elif system == "Darwin":
+                result = subprocess.run(
+                    ["pbpaste"], capture_output=True, text=True, timeout=10
+                )
+                return result.stdout
+            else:
+                # Linux: 尝试 wl-paste (Wayland) 或 xclip (X11)
+                for cmd in [["wl-paste"], ["xclip", "-selection", "clipboard", "-o"]]:
+                    try:
+                        result = subprocess.run(
+                            cmd, capture_output=True, text=True, timeout=10
+                        )
+                        if result.returncode == 0:
+                            return result.stdout
+                    except FileNotFoundError:
+                        continue
+                return "Error: No clipboard tool found. Install xclip (X11) or wl-clipboard (Wayland)."
+
+        try:
+            text = await asyncio.get_running_loop().run_in_executor(None, _read)
+            if not text:
+                return "(clipboard is empty)"
+            return text
+        except Exception as e:
+            return f"Failed to read clipboard: {str(e)}"
+
+    async def _write_clipboard(self, args: dict) -> str:
+        """将文本写入系统剪贴板。"""
+        text = args["text"]
+
+        def _write():
+            system = platform.system()
+            if system == "Windows":
+                # 使用 PowerShell Set-Clipboard，避免特殊字符问题
+                proc = subprocess.run(
+                    ["powershell", "-Command", "Set-Clipboard", "-Value", "$input"],
+                    input=text, capture_output=True, text=True, timeout=10,
+                    creationflags=0x08000000,
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(proc.stderr.strip())
+            elif system == "Darwin":
+                proc = subprocess.run(
+                    ["pbcopy"], input=text, capture_output=True, text=True, timeout=10
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(proc.stderr.strip())
+            else:
+                # Linux: 尝试 wl-copy (Wayland) 或 xclip (X11)
+                for cmd in [["wl-copy"], ["xclip", "-selection", "clipboard"]]:
+                    try:
+                        proc = subprocess.run(
+                            cmd, input=text, capture_output=True, text=True, timeout=10
+                        )
+                        if proc.returncode == 0:
+                            return
+                    except FileNotFoundError:
+                        continue
+                raise RuntimeError(
+                    "No clipboard tool found. Install xclip (X11) or wl-clipboard (Wayland)."
+                )
+
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, _write)
+            preview = text[:80] + "..." if len(text) > 80 else text
+            return f"Text copied to clipboard ({len(text)} chars): {preview}"
+        except Exception as e:
+            return f"Failed to write clipboard: {str(e)}"
+
     async def _web_search(self, args: dict) -> str:
         query = args.get("query", "")
         if not query:
@@ -520,14 +630,36 @@ class AsyncToolExecutor:
         package = args["package"]
         manager = args.get("manager", "pip")
 
+        # ★ 安全修复：使用列表参数 + shell=False，防止命令注入
         if manager == "pip":
-            cmd = f"pip install {package}"
+            cmd_list = [sys.executable, "-m", "pip", "install", package]
         elif manager == "npm":
-            cmd = f"npm install {package}"
+            cmd_list = ["npm", "install", package]
         else:
             return f"Unsupported package manager: {manager}"
 
-        return await self._exec_cmd({"command": cmd, "timeout": 120})
+        # 直接在本地异步执行，绕过 _exec_cmd 的 shell 封装
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd_list,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self.project_root,
+            )
+            self.lifecycle_manager.register_process(self.task_id, proc.pid)
+
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=120
+            )
+            output = ((stdout.decode("utf-8", errors="replace") if stdout else "") +
+                      (stderr.decode("utf-8", errors="replace") if stderr else ""))
+            return output.strip() or f"Exit code: {proc.returncode}"
+        except asyncio.TimeoutError:
+            self.lifecycle_manager.stop_task(self.task_id, reason="install_timeout")
+            return f"Package install timed out after 120s"
+        except Exception as e:
+            return f"Package install failed: {str(e)}"
 
     async def _git_commit(self, args: dict) -> str:
         message = args["message"]

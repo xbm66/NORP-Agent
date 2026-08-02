@@ -317,7 +317,7 @@ class AgentAPI:
         api_key = self.config_manager.get_api_key()
         if not api_key:
             raise RuntimeError("API key not configured")
-        session.event_queue = EventQueue(max_size=cfg.get("queue_max_size", 200))
+        session.event_queue = EventQueue(max_size=cfg.get("queue_max_size", 2000))
 
         model = cfg.get("model", "")
         if not model or not model.strip() or model.strip() in (".", ""):
@@ -325,6 +325,9 @@ class AgentAPI:
 
         # Use session-specific workspace, fall back to global config
         project_root = session.workspace or cfg.get("project_root", "")
+
+        # ★ 同步 PluginManager 的工作区到当前 session
+        self.plugin_manager.project_root = project_root
 
         # Update plugin manager config
         self.plugin_manager.update_config_snapshot(cfg)

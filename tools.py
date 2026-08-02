@@ -294,5 +294,36 @@ BUILTIN_TOOLS = [
                 "additionalProperties": False
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_clipboard",
+            "description": "读取系统剪贴板中的文本内容。用户说「读取剪贴板」「粘贴」「看看剪贴板里有什么」时调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_clipboard",
+            "description": "将文本写入系统剪贴板。用户说「复制到剪贴板」「拷贝这段文字」时调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "要写入剪贴板的文本内容"
+                    }
+                },
+                "required": ["text"],
+                "additionalProperties": False
+            }
+        }
     }
 ]

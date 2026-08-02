@@ -8,7 +8,6 @@ import os
 import re
 import time
 import threading
-from datetime import datetime
 from typing import List, Dict, Optional
 
 from openai import OpenAI
@@ -16,10 +15,20 @@ from anthropic import Anthropic as AnthropicClient
 
 from event_queue import EventQueue
 from async_executor import AsyncToolExecutor
-from tools import BUILTIN_TOOLS
 from lifecycle_manager import LifecycleManager, TaskLifecycle, get_lifecycle_manager
 from sandbox_pool import get_sandbox_pool
 from file_io_queue import get_file_io_queue
+from agent_shared import (
+    build_system_prompt,
+    build_full_messages,
+    build_tools_openai,
+    build_tools_anthropic,
+    build_responses_tools,
+    build_responses_input,
+    get_thinking_extra_body,
+    get_reasoning_effort,
+    convert_openai_messages_to_anthropic,
+)
 
 CHARS_PER_TOKEN = 3
 
@@ -163,9 +172,24 @@ class AsyncAgentLoop:
         可从任意线程调用（pywebview JS 桥接线程）。
         使用 call_soon_threadsafe 将清理工作调度到 agent 的事件循环上，
         避免在无事件循环的线程中调用 asyncio.ensure_future 导致 RuntimeError。
+
+        ★ 死锁修复：asyncio.Event 不是线程安全的。
+        从外部线程直接 set() 时，Future.set_result 内部走 loop.call_soon
+        （非 call_soon_threadsafe），不会写入自管道唤醒信号——
+        若事件循环正阻塞在 selector.select() 上（例如 agent 正在
+        _wait_for_user_input() 中 await），回调会滞留在 _ready 队列
+        无人处理，导致 wait() 永久挂起（表现为"一直等待回复"）。
+        必须通过 call_soon_threadsafe 把 set() 调度到 agent 事件循环线程，
+        借助自管道唤醒机制立即生效。
         """
-        self._stop_event.set()
-        self._user_reply_event.set()
+        if self._agent_loop and not self._agent_loop.is_closed():
+            # 调度到事件循环线程执行 set()，唤醒阻塞中的协程
+            self._agent_loop.call_soon_threadsafe(self._stop_event.set)
+            self._agent_loop.call_soon_threadsafe(self._user_reply_event.set)
+        else:
+            self._stop_event.set()
+            self._user_reply_event.set()
+
         # 生命周期：杀进程组
         if self._task_lifecycle:
             self.lifecycle_manager.stop_task(
@@ -176,9 +200,39 @@ class AsyncAgentLoop:
             self._agent_loop.call_soon_threadsafe(
                 lambda: asyncio.ensure_future(self.executor.cleanup())
             )
+        # Plugin cleanup (fire shutdown hooks + reap zombie threads)
+        if self.plugin_manager:
+            try:
+                self.plugin_manager.fire_agent_shutdown()
+            except Exception:
+                pass
+            try:
+                self.plugin_manager.shutdown()
+            except Exception:
+                pass
 
     def provide_user_input(self, text: str):
-        """提供用户输入。"""
+        """提供用户输入（线程安全，可从任意线程调用）。
+
+        ★ 死锁修复：不能在外部线程直接调用 asyncio.Event.set()。
+        事件循环阻塞在 selector 上时收不到唤醒信号，_wait_for_user_input()
+        会挂起至 30 分钟硬超时。必须通过 call_soon_threadsafe 调度到
+        agent 事件循环线程执行（先写值、再 set，保证读取到的必是新值）。
+        """
+        if self._agent_loop and not self._agent_loop.is_closed():
+            self._agent_loop.call_soon_threadsafe(
+                self._set_user_reply, text
+            )
+        else:
+            self._user_reply_value = text
+            self._user_reply_event.set()
+
+    def _set_user_reply(self, text: str):
+        """在 agent 事件循环线程内设置用户回复（仅由 call_soon_threadsafe 调用）。
+
+        先写 _user_reply_value 再 set 事件，确保 _wait_for_user_input()
+        被唤醒后读取到的必然是最新的用户输入。
+        """
         self._user_reply_value = text
         self._user_reply_event.set()
 
@@ -577,7 +631,13 @@ class AsyncAgentLoop:
                     self.event_queue.put("E:Task stopped by user")
                     self.event_queue.signal_finish()
                     return "stopped"
-                messages.append({"role": "user", "content": reply})
+                # ask_user 也是工具调用：必须返回 role=tool 消息（带 tool_call_id），
+                # 否则 Responses API 报 "No tool output found for tool call"
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": reply
+                })
                 self.executor.log_tool_call(step + 1, tool_name, tool_args,
                                             f"user replied: {reply[:200]}")
                 self._add_tool_tokens(tool_name, reply)
@@ -1047,231 +1107,44 @@ class AsyncAgentLoop:
 
     def _build_full_messages(self, user_message: str, history: Optional[List[Dict]] = None,
                               memory_content: str = "") -> list:
-        current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
-        system_prompt = self._build_system_prompt()
-
-        full_messages = [{"role": "system", "content": system_prompt}]
-
-        if memory_content:
-            full_messages.append({"role": "system", "content": memory_content})
-
-        full_messages.append({
-            "role": "system",
-            "content": f"[SystemInfo]当前系统时间：{current_time}。"
-        })
-
-        if history:
-            for m in history:
-                role = m.get("role", "")
-                if role == "user":
-                    content = m.get("content", "")
-                    full_messages.append({
-                        "role": "user",
-                        "content": f"[历史] {content}"
-                    })
-                elif role == "assistant":
-                    msg = {"role": "assistant", "content": m.get("content", "")}
-                    if m.get("reasoning_content"):
-                        msg["reasoning_content"] = m["reasoning_content"]
-                    if m.get("tool_calls"):
-                        msg["tool_calls"] = m["tool_calls"]
-                    if m.get("web_search_calls"):
-                        msg["web_search_calls"] = m["web_search_calls"]
-                    full_messages.append(msg)
-                elif role == "tool":
-                    full_messages.append({
-                        "role": "tool",
-                        "tool_call_id": m.get("tool_call_id", ""),
-                        "content": m.get("content", "")
-                    })
-
-        full_messages.append({
-            "role": "user",
-            "content": f"[SystemInfo]当前系统时间：{current_time}\n{user_message}"
-        })
-
-        return full_messages
+        """构建完整的消息列表（委托给共享模块）。"""
+        return build_full_messages(
+            user_message, self.project_root, self.enable_web_search,
+            history=history, memory_content=memory_content
+        )
 
     def _build_system_prompt(self) -> str:
-        now = datetime.now()
-        date_str = now.strftime("%Y年%m月%d日 %H:%M:%S")
-        weekday_str = ["一", "二", "三", "四", "五", "六", "日"][now.weekday()]
-        prompt = (
-            "[身份]\n"
-            "你是 Vibe Coding 自主编程智能体，采用 ReAct 架构。\n"
-            "唯一目标：将用户自然语言指令转化为精确的代码操作，主动解决问题，而非被动问答。\n\n"
-            f"[环境]\n"
-            f"当前系统时间：{date_str}（周{weekday_str}）\n"
-            f"工作区根目录：{self.project_root}\n\n"
-            "[工具使用原则]\n"
-            "- 先读后写：覆盖或修改文件前，必须先用 read_file 读取现有内容\n"
-            "- 主动探索：不确定项目结构时，先用 list_dir 了解目录布局\n"
-            "- 批量操作：多个无依赖的工具调用应在一次响应中并行发起\n"
-            "- 最小权限：只创建必要的文件，只安装声明的依赖\n"
-            "- 精准修改：优先使用 replace_in_file 进行针对性编辑，避免用 write_file 重写整个文件，以节省 token\n\n"
-            "[安全约束]\n"
-            "- 删除文件或目录前，必须调用 ask_user 获得用户确认\n"
-            "- 执行 shell 命令时禁止 sudo、rm -rf /、mkfs 等危险操作\n"
-            "- 所有文件路径限定在工作区根目录内，不得包含 .. 或绝对系统路径\n\n"
-            "[任务完成]\n"
-            "任务完成时调用 task_done，传入总结和涉及的主要代码路径，系统自动写入历史记录。\n\n"
-            "[可用工具]\n"
-            "read_file(path, start_line?, end_line?): 读取文件内容。可指定行范围只读取需要的代码片段，节省 token。\n"
-            "write_file(path, content): 创建或覆盖文件。覆盖前建议先 read_file 备份原内容。\n"
-            "replace_in_file(path, old_str, new_str): 替换文件中的指定文本片段。old_str 必须精确匹配文件中唯一一处。若匹配多处则报错，需提供更多上下文以唯一确定。用于针对性修改，避免重写整个文件。\n"
-            "list_dir(path?): 列出目录内容，用于了解项目结构。\n"
-            "search_in_files(pattern, path?): 在文件中搜索文本模式。\n"
-            "delete_file(path): 删除文件或目录。不可逆操作，执行前应请求用户确认。\n"
-            "exec_cmd(command, timeout?): 执行 shell 命令。禁止 sudo、rm -rf / 等危险操作。对不确定的命令先加 --dry-run 预览。\n"
-            "init_project(type, name): 脚手架初始化新项目，自动创建目录结构。\n"
-            "install_dependency(package, manager?): 安装项目依赖。\n"
-            "git_commit(message): 提交所有变更到 Git 仓库。\n"
-            "ask_user(question): 向用户提问或请求确认。当需要用户做出选择、澄清需求、或确认危险操作时调用。\n"
-            "task_done(summary, code_path?): 标记任务完成。完成后会自动将任务摘要和代码路径记录到 .agent_history.json。\n"
-            "open_file(path): 用系统默认程序打开文件。用户说「打开某个文件」时调用此工具。支持所有常见文件类型（图片、文档、网页等）。\n"
-        )
-        if self.enable_web_search:
-            prompt += "web_search(query): 联网搜索实时信息，适用于需要最新数据的场景。\n"
-        prompt += (
-            "\n[输出规范]\n"
-            "- 调用工具时系统自动处理格式，你只需正常推理和决策\n"
-            "- 任务完成后输出简洁的自然语言总结，无需列出每一步细节\n"
-            "- 遇到阻塞性问题时主动调用 ask_user，不要猜测用户意图\n"
-        )
-        prompt += (
-            "\n[历史消息处理]\n"
-            "对话中带有 `[历史]` 前缀的消息是之前的用户输入，这些消息已经发生过，请参考它们来理解上下文。\n"
-            "不要对 `[历史]` 消息做出新的响应或执行新的任务——它们只是背景信息。\n"
-            "只有最后一条不带 `[历史]` 前缀的用户消息才是当前需要处理的任务。\n"
-            "当用户询问关于自身信息（如名字、偏好等）时，应优先从 `[历史]` 消息中检索相关事实。\n"
-        )
-        return prompt
+        """构建系统提示词（委托给共享模块）。"""
+        return build_system_prompt(self.project_root, self.enable_web_search)
 
     # ═══════════════════════════════════════════════════════════════
     #  工具构建
     # ═══════════════════════════════════════════════════════════════
 
     def _build_tools_openai(self) -> list:
-        tools = list(BUILTIN_TOOLS)
-        if self.plugin_manager:
-            plugin_tools = self.plugin_manager.get_tools()
-            tools.extend(plugin_tools)
-        if not self.enable_web_search:
-            tools = [t for t in tools if t["function"]["name"] != "web_search"]
-        return tools
+        """构建 OpenAI 格式工具列表（委托给共享模块）。"""
+        return build_tools_openai(self.plugin_manager, self.enable_web_search)
 
     def _build_tools_anthropic(self) -> list:
-        tools = [{"type": "web_search_20250305", "name": "web_search"}]
-        for t in BUILTIN_TOOLS:
-            name = t["function"]["name"]
-            if name == "web_search":
-                continue
-            func = t["function"]
-            tools.append({
-                "name": name,
-                "description": func.get("description", ""),
-                "input_schema": func.get("parameters", {"type": "object", "properties": {}})
-            })
-        if self.plugin_manager:
-            for t in self.plugin_manager.get_tools():
-                func = t["function"]
-                tools.append({
-                    "name": func["name"],
-                    "description": func.get("description", ""),
-                    "input_schema": func.get("parameters", {"type": "object", "properties": {}})
-                })
-        return tools
+        """构建 Anthropic 格式工具列表（委托给共享模块）。"""
+        return build_tools_anthropic(self.plugin_manager, self.enable_web_search)
 
     def _build_responses_tools(self) -> list:
-        cc_tools = self._build_tools_openai()
-        tools = []
-        for t in cc_tools:
-            func = t.get("function", {})
-            name = func.get("name", "")
-            if self.enable_web_search and name == "web_search":
-                continue
-            tools.append({
-                "type": "function",
-                "name": name,
-                "description": func.get("description", ""),
-                "parameters": func.get("parameters", {"type": "object", "properties": {}}),
-            })
-        if self.enable_web_search:
-            tools.append({"type": "web_search"})
-        return tools
+        """构建 Responses API 工具列表（委托给共享模块）。"""
+        return build_responses_tools(self.plugin_manager, self.enable_web_search)
 
     def _build_responses_input(self, messages: list) -> list:
-        items = []
-        for m in messages:
-            role = m.get("role", "")
-            if role == "system":
-                items.append({
-                    "type": "message",
-                    "role": "system",
-                    "content": [{"type": "input_text", "text": m.get("content", "")}]
-                })
-            elif role == "user":
-                items.append({
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": m.get("content", "")}]
-                })
-            elif role == "assistant":
-                reasoning = m.get("reasoning_content", "")
-                if reasoning:
-                    items.append({
-                        "type": "reasoning",
-                        "content": [{"type": "reasoning_text", "text": reasoning}]
-                    })
-                text = m.get("content", "")
-                if text:
-                    items.append({
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": text}]
-                    })
-                for wc in m.get("web_search_calls", []):
-                    items.append({
-                        "type": "web_search_call",
-                        "id": wc.get("id", ""),
-                        "status": wc.get("status", "completed"),
-                        "query": wc.get("query", "")
-                    })
-                for tc in m.get("tool_calls", []):
-                    items.append({
-                        "type": "function_call",
-                        "call_id": tc.get("id", ""),
-                        "name": tc["function"]["name"],
-                        "arguments": tc["function"]["arguments"]
-                    })
-            elif role == "tool":
-                items.append({
-                    "type": "function_call_output",
-                    "call_id": m.get("tool_call_id", ""),
-                    "output": m.get("content", "")
-                })
-        return items
+        """将 OpenAI 格式 messages 转换为 Responses API 的 input items（委托给共享模块）。"""
+        return build_responses_input(messages)
 
     def _get_thinking_extra_body(self) -> dict:
-        if self.think_level == "关":
-            return {"thinking": {"type": "disabled"}}
-        return {"thinking": {"type": "enabled"}}
+        """返回 thinking extra_body 配置（委托给共享模块）。"""
+        return get_thinking_extra_body(self.think_level)
 
     def _get_reasoning_effort(self) -> Optional[str]:
-        if self.think_level == "关":
-            return None
-        effort_map = {"低": "low", "中": "medium", "高": "max"}
-        return effort_map.get(self.think_level, "max")
+        """返回 reasoning_effort 值（委托给共享模块）。"""
+        return get_reasoning_effort(self.think_level)
 
     def _convert_openai_messages_to_anthropic(self, messages: list) -> list:
-        result = []
-        for msg in messages:
-            role = msg.get("role", "")
-            if role == "system":
-                continue
-            elif role == "user":
-                result.append({"role": "user", "content": msg.get("content", "")})
-            elif role == "assistant":
-                content = msg.get("content", "")
-                result.append({"role": "assistant", "content": content})
-        return result
+        """将 OpenAI 格式消息转换为 Anthropic 格式（委托给共享模块）。"""
+        return convert_openai_messages_to_anthropic(messages)

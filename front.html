@@ -1203,6 +1203,79 @@ body {
     .wiz-card h2 { font-size: 19px; }
     #wiz-center-wrapper { padding: 44px 10px 24px; }
 }
+
+/* ── External URL Viewer (in-app iframe preview) ── */
+#external-viewer {
+    display: none;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 10050;
+    background: #fff;
+    flex-direction: column;
+}
+#external-viewer.show {
+    display: flex;
+}
+#external-viewer .viewer-bar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    height: 42px;
+    background: #fff;
+    border-bottom: 1px solid #ddd;
+    padding: 0 8px;
+    gap: 6px;
+}
+#external-viewer .back-btn {
+    background: transparent;
+    border: none;
+    color: #007aff;
+    font-size: 14px;
+    font-family: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: background 0.15s;
+}
+#external-viewer .back-btn:hover { background: #f0f5ff; }
+#external-viewer .ext-open-btn {
+    background: transparent;
+    border: 1px solid #ccc;
+    color: #333;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 4px 10px;
+    border-radius: 6px;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+#external-viewer .ext-open-btn:hover { background: #e8e8e8; }
+#external-viewer .viewer-url {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: #333;
+    font-family: inherit;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    background: #f8f9fa;
+    padding: 5px 10px;
+    outline: none;
+    box-shadow: none;
+}
+#external-viewer .viewer-url:focus {
+    border-color: #007aff;
+    background: #fff;
+}
+#external-iframe {
+    flex: 1;
+    width: 100%;
+    border: none;
+    background: #fff;
+}
 </style>
 </head>
 <body>
@@ -1675,6 +1748,15 @@ body {
             <button class="btn-primary" id="firstrun-done-btn">Start Using</button>
         </div>
     </div>
+</div>
+
+<div id="external-viewer">
+    <div class="viewer-bar">
+        <button class="back-btn" id="external-back-btn">← 返回</button>
+        <input class="viewer-url" id="external-viewer-url" type="text" spellcheck="false" placeholder="输入或粘贴 URL，按回车跳转…">
+        <button class="ext-open-btn" id="external-open-btn">↗ 在浏览器中打开</button>
+    </div>
+    <iframe id="external-iframe" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
 </div>
 
 <script>
@@ -3143,6 +3225,10 @@ async function promptTabWorkspace(tab) {
     
     tab.workspace = newWs;
     updateTabBar();
+    // Update status bar immediately if this is the active tab
+    if (tab === getActiveTab()) {
+        updateWorkspaceDisplay(newWs);
+    }
     
     if (tab.dbId) {
         try {
@@ -3520,12 +3606,76 @@ function _fallbackCopyExec(text) {
 }
 
 function openExternal(url) {
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.open_url) {
-        window.pywebview.api.open_url(url);
-    } else {
-        window.open(url, '_blank');
-    }
+    showExternalViewer(url);
 }
+
+function showExternalViewer(url) {
+    var viewer = document.getElementById('external-viewer');
+    if (!viewer) return;
+    var iframe = document.getElementById('external-iframe');
+    var openBtn = document.getElementById('external-open-btn');
+    var urlEl = document.getElementById('external-viewer-url');
+    if (iframe) iframe.src = url;
+    if (openBtn) openBtn.dataset.url = url;
+    if (urlEl) urlEl.value = url;
+    viewer.classList.add('show');
+}
+
+function closeExternalViewer() {
+    var viewer = document.getElementById('external-viewer');
+    if (!viewer) return;
+    viewer.classList.remove('show');
+    var iframe = document.getElementById('external-iframe');
+    if (iframe) iframe.src = 'about:blank';
+}
+
+function navigateExternalViewer() {
+    var urlEl = document.getElementById('external-viewer-url');
+    var iframe = document.getElementById('external-iframe');
+    var openBtn = document.getElementById('external-open-btn');
+    if (!urlEl) return;
+    var url = urlEl.value.trim();
+    if (!url) return;
+    if (!/^(https?:|data:|about:|file:)/i.test(url)) {
+        url = 'https://' + url;
+    }
+    if (iframe) iframe.src = url;
+    if (openBtn) openBtn.dataset.url = url;
+}
+
+var urlInput = document.getElementById('external-viewer-url');
+if (urlInput) {
+    urlInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            navigateExternalViewer();
+            this.blur();
+        }
+    });
+}
+
+document.getElementById('external-back-btn').addEventListener('click', closeExternalViewer);
+
+var extOpenBtn = document.getElementById('external-open-btn');
+if (extOpenBtn) {
+    extOpenBtn.addEventListener('click', function() {
+        var urlEl = document.getElementById('external-viewer-url');
+        var url = (urlEl && urlEl.value.trim()) || this.dataset.url;
+        if (!url) return;
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.open_url) {
+            window.pywebview.api.open_url(url);
+        } else {
+            window.open(url, '_blank');
+        }
+    });
+}
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        var viewer = document.getElementById('external-viewer');
+        if (viewer && viewer.classList.contains('show')) closeExternalViewer();
+    }
+});
 
 function openHTMLContent(htmlContent) {
     if (!htmlContent || !htmlContent.trim()) return;
@@ -3740,19 +3890,58 @@ function appendOrAccumulateReply(text) {
 }
 
 function appendOrAccumulateCommand(text) {
+    // Format JSON tool-call info for human-readable display.
+    // JSON strings from the backend have \n \t \r escaped, which
+    // textContent would show as literal characters — so we must
+    // parse & reformat (or at least unescape) before display.
+    var displayText = _formatCommandText(text);
+
     if (!currentCmdEl) {
         currentCmdEl = document.createElement('div');
         currentCmdEl.className = 'reasoning-box';
         currentCmdEl.style.fontFamily = 'monospace';
         currentCmdEl.style.fontSize = '11px';
         currentCmdEl.dataset.raw = text;
-        currentCmdEl.textContent = text;
+        currentCmdEl.textContent = displayText;
         cmdContent.appendChild(currentCmdEl);
     } else {
         currentCmdEl.dataset.raw += '\n' + text;
-        currentCmdEl.textContent += '\n' + text;
+        currentCmdEl.textContent += '\n' + displayText;
     }
     scrollCmdToBottom();
+}
+
+function _formatCommandText(text) {
+    try {
+        var parsed = JSON.parse(text);
+        var toolName = parsed.tool || '';
+        var args = parsed.args || {};
+        var lines = ['▶ ' + toolName];
+        for (var key in args) {
+            if (!args.hasOwnProperty(key)) continue;
+            var val = args[key];
+            var valStr = (typeof val === 'string') ? val : JSON.stringify(val);
+            // Truncate very long values to keep the panel readable
+            if (valStr.length > 300) {
+                valStr = valStr.substring(0, 300) + '…';
+            }
+            // Indent each line of multi-line values for alignment
+            var keyLabel = '  ' + key + ': ';
+            var firstLine = true;
+            valStr.split('\n').forEach(function(line) {
+                if (firstLine) {
+                    lines.push(keyLabel + line);
+                    firstLine = false;
+                } else {
+                    lines.push('    ' + line);
+                }
+            });
+        }
+        return lines.join('\n');
+    } catch(e) {
+        // Fallback for non-JSON text: unescape common JSON escape sequences
+        return text.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r');
+    }
 }
 
 function flushAccumulated() {
@@ -4849,11 +5038,7 @@ document.getElementById('about-close-btn').addEventListener('click', function() 
 document.getElementById('apikey-confirm-btn').addEventListener('click', confirmApiKey);
 document.getElementById('apikey-cancel-btn').addEventListener('click', function() { apikeyModal.style.display = 'none'; });
 document.getElementById('apikey-get-btn').addEventListener('click', function() {
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.open_url) {
-        window.pywebview.api.open_url('https://platform.deepseek.com/');
-    } else {
-        window.open('https://platform.deepseek.com/', '_blank');
-    }
+    openExternal('https://platform.deepseek.com/');
 });
 
 userInput.addEventListener('keydown', function(e) {
@@ -5285,11 +5470,7 @@ function bindWizardEvents() {
     document.getElementById('wiz-step1-back').addEventListener('click', wizPrevStep);
     document.getElementById('wiz-step1-next').addEventListener('click', wizNextStep);
     document.getElementById('wiz-getkey').addEventListener('click', function() {
-        if (window.pywebview && window.pywebview.api && window.pywebview.api.open_url) {
-            window.pywebview.api.open_url('https://platform.deepseek.com/');
-        } else {
-            window.open('https://platform.deepseek.com/', '_blank');
-        }
+        openExternal('https://platform.deepseek.com/');
     });
     document.getElementById('wiz-verify-key').addEventListener('click', wizVerifyKey);
     document.getElementById('wiz-apikey').addEventListener('input', function() {

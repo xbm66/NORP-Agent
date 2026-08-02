@@ -136,6 +136,11 @@ def _save_notes(context, notes: list):
     path = _get_notes_path(context)
     # 只保留最近 500 条
     if len(notes) > 500:
+        trimmed = len(notes) - 500
+        context.logger.warn(
+            f"Notes database reached {len(notes)} entries – "
+            f"trimming oldest {trimmed} to stay at 500 limit"
+        )
         notes = notes[-500:]
     with open(path, "w", encoding="utf-8") as f:
         json.dump(notes, f, indent=2, ensure_ascii=False)
@@ -351,8 +356,11 @@ def on_task_start(task_text: str, context):
 
 
 def on_task_done(summary: str, final_reply: str, context):
-    """任务完成时自动记录摘要笔记（可选）。"""
-    # 如果任务摘要中提到关键成果，自动记录
+    """任务完成时自动记录摘要笔记（可选）。
+
+    Auto-saves are enqueued to a background thread so the hook chain
+    is never blocked by disk I/O.
+    """
     auto_note_keywords = ["修复", "完成", "实现", "添加", "创建",
                           "fix", "done", "implement", "add", "create"]
     should_auto_note = any(
@@ -367,28 +375,39 @@ def on_task_done(summary: str, final_reply: str, context):
             f"完成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
-        try:
-            _handle_save_note({
-                "title": note_title,
-                "content": note_content,
-                "tags": "auto,task-complete"
-            }, context)
-            s = context.storage
-            s["notes_added_this_session"] = s.get("notes_added_this_session", 0) + 1
-        except Exception:
-            pass  # 自动笔记失败不应影响主流程
+        # Offload the save to a daemon thread so we don't block the hook chain
+        import threading
+        def _save_auto_note():
+            try:
+                _handle_save_note({
+                    "title": note_title,
+                    "content": note_content,
+                    "tags": "auto,task-complete"
+                }, context)
+                s = context.storage
+                s["notes_added_this_session"] = s.get("notes_added_this_session", 0) + 1
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_save_auto_note, daemon=True)
+        t.start()
 
 
 def on_task_error(error_msg: str, context):
     """任务错误时自动记录。"""
-    try:
-        _handle_save_note({
-            "title": f"任务错误: {error_msg[:50].strip()}",
-            "content": (
-                f"错误信息: {error_msg}\n\n"
-                f"发生时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            ),
-            "tags": "auto,task-error"
-        }, context)
-    except Exception:
-        pass
+    import threading
+    def _save_error_note():
+        try:
+            _handle_save_note({
+                "title": f"任务错误: {error_msg[:50].strip()}",
+                "content": (
+                    f"错误信息: {error_msg}\n\n"
+                    f"发生时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                ),
+                "tags": "auto,task-error"
+            }, context)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_save_error_note, daemon=True)
+    t.start()

@@ -252,6 +252,7 @@ def on_task_error(error_msg: str, context):
     s = context.storage
     s["error_count"] = s.get("error_count", 0) + 1
 
+    duration = None  # initialised before use
     start_time = s.get("current_task_start", 0)
     if start_time > 0:
         duration = time.time() - start_time
@@ -260,7 +261,10 @@ def on_task_error(error_msg: str, context):
         s["task_durations"] = durations
 
     s["current_task_start"] = 0
-    context.logger.error(f"Task #{s['task_count']} failed after {_fmt_duration(duration) if 'duration' in dir() else '?'}")
+    context.logger.error(
+        f"Task #{s['task_count']} failed after "
+        f"{_fmt_duration(duration) if duration is not None else '?'}"
+    )
 
 
 # ── 6. 钩子：工具调用计时 ──────────────────────────────────────

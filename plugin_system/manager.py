@@ -3,6 +3,7 @@
 
 import importlib.util
 import json
+import logging
 import os
 import sys
 import threading
@@ -13,6 +14,7 @@ from plugin_system.context import PluginContext
 from plugin_system.security import (
     PluginSecurity, SecurityIssue, Severity,
     PluginImportBlocker, StrictImportBlocker, ResourceLimiter,
+    _loading_plugin,
 )
 
 
@@ -45,6 +47,13 @@ _MUTATING_HOOKS = {"before_step", "before_tool_call", "after_tool_call"}
 
 # Max seconds a single hook callback is allowed to run
 HOOK_TIMEOUT = 5.0
+
+# Logger for plugin system messages
+_log = logging.getLogger("plugin_system")
+
+# Track threads abandoned due to hook timeout (reaped at shutdown)
+_zombie_threads: List[threading.Thread] = []
+_zombie_lock = threading.Lock()
 
 
 class PluginInfo:
@@ -127,6 +136,7 @@ class PluginManager:
         self._config_snapshot: dict = {}
 
         self._lock = threading.Lock()
+        self._contexts_lock = threading.Lock()
 
         # ── Security ──
         self.security = PluginSecurity(config or {})
@@ -200,6 +210,46 @@ class PluginManager:
         finally:
             # Always tear down blockers
             self._teardown_import_blockers()
+
+    def shutdown(self):
+        """Clean up plugin manager resources (call at agent shutdown)."""
+        self._teardown_import_blockers()
+        self._reap_zombies()
+
+    def unload_plugin(self, plugin_name: str) -> bool:
+        """Unload a single plugin by name.
+
+        Returns True if the plugin was found and removed, False otherwise.
+        Useful for hot-reloading during plugin development.
+        """
+        with self._lock:
+            info = self._plugins.pop(plugin_name, None)
+            if info is None:
+                return False
+
+            # Remove registered tools
+            for tool in (info.tools or []):
+                tname = tool.get("function", {}).get("name", "")
+                self._tool_registry.pop(tname, None)
+
+            # Remove hooked listeners
+            for hook_name in HOOK_NAMES:
+                self._hooks[hook_name] = [
+                    (pn, fn) for (pn, fn) in self._hooks[hook_name]
+                    if pn != plugin_name
+                ]
+
+        with self._contexts_lock:
+            self._contexts.pop(plugin_name, None)
+
+        self._audit_results.pop(plugin_name, None)
+
+        # Remove module from sys.modules so it can be re-imported fresh
+        mod_name = f"vibe_plugin_{plugin_name}"
+        sys.modules.pop(mod_name, None)
+
+        _log.info("Unloaded plugin '%s'", plugin_name)
+        return True
 
     # ── Import blocker management ─────────────────────────────────
 
@@ -396,6 +446,8 @@ class PluginManager:
 
         if not info.enabled:
             with self._lock:
+                if name in self._plugins:
+                    _log.debug("Plugin '%s' (disabled) overwrites previously loaded plugin", name)
                 self._plugins[name] = info
             return
 
@@ -450,8 +502,12 @@ class PluginManager:
                 limiter.enable()
 
             try:
+                # Signal to PluginImportBlocker that a plugin is loading
+                # (avoids frame-walking on every import inside the plugin)
+                _loading_plugin.active = True
                 spec.loader.exec_module(module)
             finally:
+                _loading_plugin.active = False
                 if limiter:
                     limiter.disable()
 
@@ -521,22 +577,35 @@ class PluginManager:
 
         # Skip files that don't define any plugin interface
         if not info.tools and not info.hook_names and not callable(getattr(info.module, 'execute', None)):
-            return  # not a plugin — silently skip
+            _log.debug("Skipping '%s' – no TOOLS, hooks, or execute() defined", name)
+            return  # not a plugin
 
         with self._lock:
+            if info.name in self._plugins:
+                _log.warning(
+                    "Plugin '%s' (%s) overwrites previously loaded '%s'",
+                    info.name, info.path, self._plugins[info.name].path,
+                )
             self._plugins[info.name] = info
 
     def _get_context(self, plugin_name: str) -> PluginContext:
-        """Return (or lazily create) the PluginContext for *plugin_name*."""
-        if plugin_name not in self._contexts:
-            self._contexts[plugin_name] = PluginContext(
-                plugin_name=plugin_name,
-                project_root=self.project_root,
-                app_dir=self.app_dir,
-                config=self._config_snapshot,
-            )
-        ctx = self._contexts[plugin_name]
-        # Always refresh the config snapshot
+        """Return (or lazily create) the PluginContext for *plugin_name*.
+
+        Thread-safe: ``_contexts`` dict mutations are guarded by
+        ``_contexts_lock`` to prevent TOCTOU races when multiple hooks
+        fire simultaneously (e.g. streaming token + tool call).
+        """
+        with self._contexts_lock:
+            if plugin_name not in self._contexts:
+                self._contexts[plugin_name] = PluginContext(
+                    plugin_name=plugin_name,
+                    project_root=self.project_root,
+                    app_dir=self.app_dir,
+                    config=self._config_snapshot,
+                )
+            ctx = self._contexts[plugin_name]
+        # Always refresh the config snapshot (safe – PluginContext fields are
+        # independently mutable and this is a simple attribute assignment)
         ctx.config = self._config_snapshot.copy() if self._config_snapshot else {}
         return ctx
 
@@ -582,7 +651,11 @@ class PluginManager:
 
     @staticmethod
     def _call_with_timeout(fn: Callable, *args, **kwargs):
-        """Call *fn* in a daemon thread with a hard timeout."""
+        """Call *fn* in a daemon thread with a hard timeout.
+
+        If the hook times out the thread is tracked so it can be reaped
+        later (prevents zombie-thread accumulation).
+        """
         result_holder = [None]
         error_holder: List[Optional[Exception]] = [None]
         done = threading.Event()
@@ -599,10 +672,28 @@ class PluginManager:
         done.wait(timeout=HOOK_TIMEOUT)
 
         if not done.is_set():
-            # Timeout – do NOT join; just abandon the thread
+            # Timeout – track for later cleanup
+            _log.warning(
+                "Hook %s timed out after %.1fs – thread abandoned (will be reaped at shutdown)",
+                getattr(fn, '__name__', str(fn)), HOOK_TIMEOUT,
+            )
+            with _zombie_lock:
+                _zombie_threads.append(t)
             return None
 
         if error_holder[0] is not None:
             raise error_holder[0]
 
         return result_holder[0]
+
+    @staticmethod
+    def _reap_zombies():
+        """Try to join all abandoned hook threads (call at shutdown)."""
+        with _zombie_lock:
+            threads = _zombie_threads[:]
+            _zombie_threads.clear()
+        for t in threads:
+            t.join(timeout=2.0)
+        remaining = sum(1 for t in threads if t.is_alive())
+        if remaining:
+            _log.warning("%d zombie hook thread(s) could not be joined", remaining)

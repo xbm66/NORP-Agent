@@ -2,8 +2,15 @@
 # Copyright (c) 2026 xingluosama
 
 import os
+import threading
 from datetime import datetime
 from typing import Dict
+
+# ── File-handle cache for SimpleLogger ──────────────────────────
+# Reuses open file handles by log path so we don't open/close on every
+# log line (can be hundreds per task).
+_log_handles: Dict[str, object] = {}
+_log_handles_lock = threading.Lock()
 
 
 class SimpleLogger:
@@ -20,8 +27,12 @@ class SimpleLogger:
         if self._log_dir:
             try:
                 log_path = os.path.join(self._log_dir, "plugin.log")
-                with open(log_path, "a", encoding="utf-8") as f:
-                    f.write(line + "\n")
+                with _log_handles_lock:
+                    if log_path not in _log_handles:
+                        _log_handles[log_path] = open(log_path, "a", encoding="utf-8")
+                    f = _log_handles[log_path]
+                f.write(line + "\n")
+                f.flush()
             except Exception:
                 pass
 

@@ -63,6 +63,22 @@ _PATTERNS = {
     "TODO 注释": (r"#\s*TODO", "warning", "存在未完成的 TODO"),
 }
 
+# ── False-positive filters for hardcoded-key detection ──────────
+# These patterns match common placeholders / safe patterns that the
+# naive regex above would flag incorrectly.
+_KEY_FALSE_POSITIVES = [
+    r"(?i)YOUR_.*_HERE",           # "YOUR_API_KEY_HERE"
+    r"(?i)REPLACE_.*",             # "REPLACE_WITH_YOUR_KEY"
+    r"\$\{[A-Z_]+\}",              # "${PASSWORD}", "${API_KEY}"
+    r"os\.(environ|getenv)\s*\[",  # os.environ["KEY"]
+    r"os\.(environ|getenv)\.get",  # os.environ.get("KEY")
+    r"=\s*None\s*$",               # "token = None"
+    r"=\s*\"\"\s*$",               # "token = """
+    r"=\s*''\s*$",                 # "token = ''
+    r"(?i)example|sample|demo|test",  # Example/test code
+    r"#.*[Nn][Oo][Qq][Aa]",        # Commented out
+]
+
 _CODE_EXTENSIONS = {
     ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs",
     ".java", ".c", ".cpp", ".h", ".swift", ".kt", ".rb",
@@ -201,6 +217,10 @@ def _review_file(file_path: str, strictness: str) -> str:
             if pattern is None:
                 continue
             if re.search(pattern, raw, re.IGNORECASE):
+                # Filter false positives for hardcoded-key detection
+                if name == "硬编码密钥":
+                    if any(re.search(fp, raw, re.IGNORECASE) for fp in _KEY_FALSE_POSITIVES):
+                        continue
                 issues.append({
                     "line": i,
                     "severity": sev,

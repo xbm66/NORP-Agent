@@ -16,13 +16,16 @@ All features are individually togglable via config.json keys:
 
 import ast
 import builtins
-import inspect
 import os
 import signal
 import sys
 import threading
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple
+
+# Thread-local flag set during plugin loading to short-circuit frame-walking
+# in the import blocker (huge perf win – avoids walking on every import).
+_loading_plugin = threading.local()
 
 
 # ── Enums ──────────────────────────────────────────────────────────
@@ -82,12 +85,14 @@ DANGEROUS_CALLS: Dict[Tuple[str, ...], Tuple[Severity, str, str]] = {
     ("ctypes",):            (Severity.CRITICAL, "native_exec", "ctypes allows loading arbitrary DLLs / native code"),
     ("cffi",):              (Severity.CRITICAL, "native_exec", "cffi allows loading arbitrary native code"),
 
-    # ── File deletion (WARNING) ──
+    # ── File deletion / permission changes (WARNING) ──
     ("os", "remove"):       (Severity.WARNING, "file_delete", "os.remove() deletes files"),
     ("os", "unlink"):       (Severity.WARNING, "file_delete", "os.unlink() deletes files"),
     ("shutil", "rmtree"):   (Severity.WARNING, "file_delete", "shutil.rmtree() recursively deletes directories"),
     ("shutil", "move"):     (Severity.WARNING, "file_move", "shutil.move() can move/rename files"),
     ("os", "rmdir"):        (Severity.WARNING, "file_delete", "os.rmdir() removes directories"),
+    ("os", "chmod"):        (Severity.WARNING, "file_permission", "os.chmod() changes file permissions"),
+    ("os", "chown"):        (Severity.WARNING, "file_permission", "os.chown() changes file ownership"),
 
     # ── Network (WARNING) ──
     ("socket",):            (Severity.WARNING, "network", "socket enables raw TCP/UDP network access"),
@@ -225,12 +230,25 @@ class PluginImportBlocker:
         return None  # not from plugin – allow
 
     def _caller_is_plugin(self) -> bool:
-        """Check whether any frame in the stack belongs to a plugin module."""
+        """Check whether any frame in the stack belongs to a plugin module.
+
+        Uses ``sys._getframe()`` for a lightweight walk (avoids the heavy
+        ``inspect.stack()`` which creates full FrameInfo tuples on every call).
+        A thread-local short-circuit is checked first for the common loading path.
+        """
+        # Fast path: plugin-loading in progress on this thread
+        if getattr(_loading_plugin, 'active', False):
+            return True
+
         try:
-            for frame_info in inspect.stack():
-                mod_name = frame_info.frame.f_globals.get("__name__", "")
+            frame = sys._getframe()
+            depth = 0
+            while frame is not None and depth < 80:
+                mod_name = frame.f_globals.get("__name__", "")
                 if mod_name.startswith(self.plugin_prefix):
                     return True
+                frame = frame.f_back
+                depth += 1
         except Exception:
             pass
         return False
@@ -480,7 +498,17 @@ class PluginSecurity:
 
 class ResourceLimiter:
     """
-    Best-effort resource limits for plugin execution.
+    **EXPERIMENTAL – process-level resource limits.**
+
+    .. warning::
+
+       ``RLIMIT_CPU`` and ``RLIMIT_AS`` are **process-wide** constraints.
+       They affect the *entire agent process*, not just the plugin being loaded.
+       If a plugin triggers these limits the whole agent may be killed by the OS
+       (SIGXCPU / SIGKILL).  Use with caution.
+
+       ``signal.alarm()`` is similarly process-global and may interfere with
+       other timers in the application.
 
     - CPU time: signal.alarm (Unix) or Timer thread (Windows)
     - Memory: resource.setrlimit (Unix only)
@@ -590,11 +618,18 @@ class StrictImportBlocker:
         return None
 
     def _caller_is_plugin(self) -> bool:
+        # Fast path: plugin-loading in progress on this thread
+        if getattr(_loading_plugin, 'active', False):
+            return True
         try:
-            for frame_info in inspect.stack():
-                mod_name = frame_info.frame.f_globals.get("__name__", "")
+            frame = sys._getframe()
+            depth = 0
+            while frame is not None and depth < 80:
+                mod_name = frame.f_globals.get("__name__", "")
                 if mod_name.startswith(self.plugin_prefix):
                     return True
+                frame = frame.f_back
+                depth += 1
         except Exception:
             pass
         return False

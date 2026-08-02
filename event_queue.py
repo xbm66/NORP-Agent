@@ -47,15 +47,27 @@ class EventQueue:
         Args:
             event: 事件字符串，格式为 "前缀:内容"。
                    前缀包括 T: R: E: Q: D: 等。
+
+        优化：连续的 T:（思考）事件直接在队尾合并拼接，
+        使队列中思考事件数 = 思考块数量（而非 chunk 数量），
+        避免长思考过程产生海量小事件触发丢弃导致思考内容吞字。
         """
         with self._lock:
-            self._deque.append(event)
+            if event.startswith("T:") and self._deque and self._deque[-1].startswith("T:"):
+                # 同一思考块的连续 chunk 合并为一个事件，内容不丢失
+                self._deque[-1] += event[2:]
+            else:
+                self._deque.append(event)
 
             while len(self._deque) > self.max_size:
                 dropped = False
                 for i, e in enumerate(self._deque):
                     if e.startswith("T:"):
                         del self._deque[i]
+                        # 若紧随其后是 F:（思考块结束标记），一并删除，
+                        # 防止前端收到孤立的 F: 把思考块截断导致显示破碎
+                        if i < len(self._deque) and self._deque[i].startswith("F:"):
+                            del self._deque[i]
                         dropped = True
                         break
                 if not dropped:
@@ -193,8 +205,8 @@ if __name__ == "__main__":
     assert q.get() is None
     print("  PASS")
 
-    # Test 6: Thread safety (multiple producers)
-    print("[Test6] Multi-threaded concurrent put")
+    # Test 6: Thread safety (multiple producers), T: may be merged
+    print("[Test6] Multi-threaded concurrent put (T: merged)")
     q = EventQueue(max_size=100)
 
     def producer(prefix, count):
@@ -210,11 +222,20 @@ if __name__ == "__main__":
     t2.join()
     q.signal_finish()
 
-    count = 0
-    while q.get() is not None:
-        count += 1
+    events = []
+    while True:
+        e = q.get()
+        if e is None:
+            break
+        events.append(e)
 
-    assert count == 100, f"Expected 100 events, got {count}"
+    # All R: events must be preserved individually
+    r_events = [e for e in events if e.startswith("R:")]
+    assert len(r_events) == 50, f"Expected 50 R events, got {len(r_events)}"
+    # T: events may be merged, but merged text must contain EVERY chunk
+    t_text = "".join(e[2:] for e in events if e.startswith("T:"))
+    expected_t = "".join(str(i) for i in range(50))
+    assert t_text == expected_t, "Merged T: text must contain all reasoning chunks"
     print("  PASS")
 
     # Test 7: Invalid max_size
@@ -224,5 +245,45 @@ if __name__ == "__main__":
         print("  FAIL: should have raised ValueError")
     except ValueError:
         print("  PASS")
+
+    # Test 8: Consecutive T: events merge into a single event (no char loss)
+    print("[Test8] Consecutive T: events merge without losing chars")
+    q = EventQueue()
+    q.put("T:aaa")
+    q.put("T:bbb")
+    q.put("T:ccc")
+    q.put("F:")
+    q.put("R:reply")
+    q.signal_finish()
+
+    events = []
+    while True:
+        e = q.get()
+        if e is None:
+            break
+        events.append(e)
+
+    assert events == ["T:aaabbbccc", "F:", "R:reply"], f"Expected merged T, got {events}"
+    print("  PASS")
+
+    # Test 9: Dropping old T: also removes its trailing F: (no broken thinking block)
+    print("[Test9] Dropping T: also drops its trailing F:")
+    q = EventQueue(max_size=2)
+    q.put("T:aaa")
+    q.put("T:bbb")   # merged -> "T:aaabbb"
+    q.put("F:")      # queue full -> drop "T:aaabbb" and trailing "F:"
+    q.put("R:ok")
+    q.signal_finish()
+
+    events = []
+    while True:
+        e = q.get()
+        if e is None:
+            break
+        events.append(e)
+
+    assert "F:" not in events, "Orphan F: must not survive without its thinking block"
+    assert events == ["R:ok"], f"Expected only R:ok, got {events}"
+    print("  PASS")
 
     print("\n=== All Tests Passed ===")

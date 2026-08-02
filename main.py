@@ -120,21 +120,22 @@ def main():
 
         _start_zombie_scanner()
 
-        webview.start()
+        try:
+            webview.start()
+        finally:
+            # 程序退出时清理（即使 webview 崩溃也确保执行）
+            lm = get_lifecycle_manager()
+            lm.shutdown()
+            pool = get_sandbox_pool()
+            # 在线程中运行异步销毁
+            def _cleanup():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(pool.destroy_all())
 
-        # 程序退出时清理
-        lm = get_lifecycle_manager()
-        lm.shutdown()
-        pool = get_sandbox_pool()
-        # 在线程中运行异步销毁
-        def _cleanup():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(pool.destroy_all())
-
-        cleanup_thread = threading.Thread(target=_cleanup, daemon=True)
-        cleanup_thread.start()
-        cleanup_thread.join(timeout=5)
+            cleanup_thread = threading.Thread(target=_cleanup, daemon=True)
+            cleanup_thread.start()
+            cleanup_thread.join(timeout=5)
     except Exception:
         import traceback
         crash_log = os.path.join(APP_DIR, "crash.log")

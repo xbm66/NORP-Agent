@@ -87,6 +87,9 @@ class LifecycleManager:
         self._tasks: Dict[str, TaskLifecycle] = {}
         self._process_groups: Dict[str, ProcessGroup] = {}
         self._lock = threading.Lock()
+        # TOCTOU 防护：正在锁外执行 _kill_process_group 的任务 ID 集合
+        # stop_task() 在锁内检查此集合，防止并发重复杀进程组
+        self._killing: Set[str] = set()
         # 僵尸扫描定时器
         self._zombie_scanner: Optional[asyncio.Task] = None
         self._running = False
@@ -136,6 +139,10 @@ class LifecycleManager:
         - 设置 cancel_event 通知异步协程
         - 执行清理回调
         - WAITING_USER 状态的任务也可被停止（用户主动取消等待）
+
+        ★ TOCTOU 修复：使用 _killing 集合原子标记，防止两个线程同时杀同一进程组。
+        ★ 阻塞修复：杀进程组（subprocess.run / taskkill 可能阻塞数秒）
+        移到锁外执行，避免长时间持有 _lock 导致其他线程卡死。
         """
         with self._lock:
             if task_id not in self._tasks:
@@ -144,12 +151,13 @@ class LifecycleManager:
             task = self._tasks[task_id]
             if task.state in (TaskState.STOPPED, TaskState.STOPPING):
                 return
+            # TOCTOU 防护：检查是否已有线程正在杀此任务的进程组
+            if task_id in self._killing:
+                return
 
             task.state = TaskState.STOPPING
-
-            # 杀进程组
-            if task.process_group:
-                self._kill_process_group(task.process_group)
+            self._killing.add(task_id)  # 原子标记：此任务正在被清理
+            pg = task.process_group
 
             # 通知协程
             if task._cancel_event:
@@ -165,10 +173,20 @@ class LifecycleManager:
             task.state = TaskState.STOPPED
             task.stopped_at = time.time()
 
+        # 锁外杀进程组：taskkill / killpg 可能阻塞数秒，绝不能持锁执行
+        if pg:
+            self._kill_process_group(pg)
+
+        # 清理完成，移除 TOCTOU 标记
+        with self._lock:
+            self._killing.discard(task_id)
+
     def timeout_task(self, task_id: str):
         """任务超时处理：等同于 stop_task，但状态为 TIMEOUT。
-        
+
         WAITING_USER 状态也可被超时（30分钟僵尸扫描器兜底）。
+
+        ★ TOCTOU 修复 + 阻塞修复：同 stop_task。
         """
         with self._lock:
             if task_id not in self._tasks:
@@ -176,11 +194,12 @@ class LifecycleManager:
             task = self._tasks[task_id]
             if task.state in (TaskState.STOPPED, TaskState.STOPPING):
                 return
+            if task_id in self._killing:
+                return
 
             task.state = TaskState.STOPPING
-
-            if task.process_group:
-                self._kill_process_group(task.process_group, force=True)
+            self._killing.add(task_id)
+            pg = task.process_group
 
             if task._cancel_event:
                 task._cancel_event.set()
@@ -193,6 +212,13 @@ class LifecycleManager:
 
             task.state = TaskState.TIMEOUT
             task.stopped_at = time.time()
+
+        # 锁外杀进程组（force=True 强制清理）
+        if pg:
+            self._kill_process_group(pg, force=True)
+
+        with self._lock:
+            self._killing.discard(task_id)
 
     # ── 进程组管理 ──
 
@@ -314,10 +340,13 @@ class LifecycleManager:
         关键安全规则：
         - RUNNING / WAITING_USER 任务永不触碰（WAITING_USER 有自身 30min 硬超时）
         - STOPPED / TIMEOUT / ERROR 才清理
+        - _killing 集合中的任务跳过（TOCTOU 防护：正在锁外杀进程）
         """
         with self._lock:
             to_remove = []
             for task_id, task in self._tasks.items():
+                if task_id in self._killing:
+                    continue  # 正在被另一个线程清理，跳过
                 if task.state in (TaskState.STOPPED, TaskState.TIMEOUT, TaskState.ERROR):
                     # 确保进程组已清理
                     if task.process_group and task.process_group.pids:

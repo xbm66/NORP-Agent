@@ -118,6 +118,8 @@ class ToolExecutor:
             "task_done": self._task_done,
             "web_search": self._web_search,
             "open_file": self._open_file,
+            "read_clipboard": self._read_clipboard,
+            "write_clipboard": self._write_clipboard,
         }
         handler = handlers.get(tool_name)
         if not handler:
@@ -299,6 +301,98 @@ class ToolExecutor:
         except Exception as e:
             return f"Failed to open file: {str(e)}"
 
+    def _read_clipboard(self, args: dict) -> str:
+        """读取系统剪贴板文本。"""
+        system = platform.system()
+        try:
+            if system == "Windows":
+                try:
+                    result = subprocess.run(
+                        ["powershell", "-Command", "Get-Clipboard"],
+                        capture_output=True, text=True, timeout=10,
+                        creationflags=0x08000000,
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(result.stderr.strip())
+                    text = result.stdout
+                except FileNotFoundError:
+                    import tempfile
+                    tmp = os.path.join(tempfile.gettempdir(), "_vibe_paste.txt")
+                    subprocess.run(
+                        ["powershell", "-Command", f"Get-Clipboard > '{tmp}'"],
+                        capture_output=True, timeout=10,
+                        creationflags=0x08000000,
+                    )
+                    try:
+                        with open(tmp, "r", encoding="utf-8", errors="replace") as f:
+                            text = f.read()
+                    finally:
+                        try:
+                            os.remove(tmp)
+                        except Exception:
+                            pass
+            elif system == "Darwin":
+                result = subprocess.run(
+                    ["pbpaste"], capture_output=True, text=True, timeout=10
+                )
+                text = result.stdout
+            else:
+                for cmd in [["wl-paste"], ["xclip", "-selection", "clipboard", "-o"]]:
+                    try:
+                        result = subprocess.run(
+                            cmd, capture_output=True, text=True, timeout=10
+                        )
+                        if result.returncode == 0:
+                            text = result.stdout
+                            break
+                    except FileNotFoundError:
+                        continue
+                else:
+                    return "Error: No clipboard tool found. Install xclip (X11) or wl-clipboard (Wayland)."
+        except Exception as e:
+            return f"Failed to read clipboard: {str(e)}"
+
+        if not text:
+            return "(clipboard is empty)"
+        return text
+
+    def _write_clipboard(self, args: dict) -> str:
+        """将文本写入系统剪贴板。"""
+        text = args["text"]
+        system = platform.system()
+        try:
+            if system == "Windows":
+                proc = subprocess.run(
+                    ["powershell", "-Command", "Set-Clipboard", "-Value", "$input"],
+                    input=text, capture_output=True, text=True, timeout=10,
+                    creationflags=0x08000000,
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(proc.stderr.strip())
+            elif system == "Darwin":
+                proc = subprocess.run(
+                    ["pbcopy"], input=text, capture_output=True, text=True, timeout=10
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(proc.stderr.strip())
+            else:
+                for cmd in [["wl-copy"], ["xclip", "-selection", "clipboard"]]:
+                    try:
+                        proc = subprocess.run(
+                            cmd, input=text, capture_output=True, text=True, timeout=10
+                        )
+                        if proc.returncode == 0:
+                            break
+                    except FileNotFoundError:
+                        continue
+                else:
+                    return "Error: No clipboard tool found. Install xclip (X11) or wl-clipboard (Wayland)."
+        except Exception as e:
+            return f"Failed to write clipboard: {str(e)}"
+
+        preview = text[:80] + "..." if len(text) > 80 else text
+        return f"Text copied to clipboard ({len(text)} chars): {preview}"
+
     def _web_search(self, args: dict) -> str:
         """使用 DuckDuckGo Instant Answer API 进行联网搜索。"""
         query = args.get("query", "")
@@ -416,18 +510,23 @@ class ToolExecutor:
     def _install_dependency(self, args: dict) -> str:
         package = args["package"]
         manager = args.get("manager", "pip")
+
+        # ★ 安全修复：使用列表参数 + shell=False，防止命令注入
+        # 不再用字符串拼接（如 pip install requests && rm -rf /）
         if manager == "pip":
-            cmd = f"pip install {package}"
+            cmd_list = [sys.executable, "-m", "pip", "install", package]
         elif manager == "npm":
-            cmd = f"npm install {package}"
+            cmd_list = ["npm", "install", package]
         else:
             return f"Unsupported package manager: {manager}"
+
         if self._use_sandbox:
-            return self._exec_in_sandbox(cmd, timeout=120)
+            return self._exec_in_sandbox(" ".join(cmd_list), timeout=120)
+
         result = subprocess.run(
-            cmd.split() if manager == "pip" else ["npm", "install", package],
+            cmd_list,
             capture_output=True, text=True, timeout=120, cwd=self.project_root,
-            shell=(manager == "pip")
+            shell=False
         )
         return result.stdout.strip() or result.stderr.strip()
 

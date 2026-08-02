@@ -6,5 +6,9 @@
 # Actual plugin files belong in the plugins/ directory.
 
 from plugin_system.context import PluginContext, SimpleLogger
-from plugin_system.manager import PluginManager, PluginInfo, HOOK_NAMES
-from plugin_system.security import PluginSecurity, SecurityIssue, Severity, PluginImportBlocker, StrictImportBlocker, ResourceLimiter
+from plugin_system.manager import PluginManager, PluginInfo, HOOK_NAMES, HOOK_TIMEOUT
+from plugin_system.security import (
+    PluginSecurity, SecurityIssue, Severity,
+    PluginImportBlocker, StrictImportBlocker, ResourceLimiter,
+    _loading_plugin,
+)
