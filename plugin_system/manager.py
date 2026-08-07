@@ -174,10 +174,20 @@ class PluginManager:
         # ── Setup import blockers before loading ──
         self._setup_import_blockers()
 
+        # Deduplicate directories by realpath to prevent scanning the same
+        # physical location twice (e.g. "official_plugins" vs "./official_plugins")
+        seen_dirs = set()
+        unique_dirs = []
+        for d in self._plugin_dirs:
+            if not os.path.isdir(d):
+                continue
+            real = os.path.realpath(d)
+            if real not in seen_dirs:
+                seen_dirs.add(real)
+                unique_dirs.append(d)
+
         try:
-            for d in self._plugin_dirs:
-                if not os.path.isdir(d):
-                    continue
+            for d in unique_dirs:
                 try:
                     entries = sorted(os.listdir(d))
                 except OSError:
@@ -542,28 +552,13 @@ class PluginManager:
 
             execute_fn = getattr(module, "execute", None)
 
-            # Use the resolved name for registration
-            resolved_name = info.name
-
-            with self._lock:
-                for tool in info.tools:
-                    func = tool.get("function", {})
-                    tname = func.get("name", "")
-                    if tname:
-                        # Guard against duplicate tool names
-                        if tname in self._tool_registry:
-                            existing = self._tool_registry[tname][0]
-                            raise RuntimeError(
-                                f"Tool '{tname}' already registered by "
-                                f"plugin '{existing}'")
-                        self._tool_registry[tname] = (resolved_name, execute_fn)
-
-                # ── hooks ──
-                for hook_name in HOOK_NAMES:
-                    fn = getattr(module, hook_name, None)
-                    if callable(fn):
-                        self._hooks[hook_name].append((resolved_name, fn))
-                        info._hook_names.append(hook_name)
+            # ── Collect hook names BEFORE registration ──
+            # 必须先在锁外收集，这样才能在 skip check 中正确判断
+            # （之前的实现在锁内边收集边注册，若 skip 时 return 会导致残留）
+            for hook_name in HOOK_NAMES:
+                fn = getattr(module, hook_name, None)
+                if callable(fn):
+                    info._hook_names.append(hook_name)
 
         except ImportError as exc:
             # Import blocked by security – surface clearly
@@ -575,18 +570,67 @@ class PluginManager:
             info.enabled = False
             traceback.print_exc()
 
-        # Skip files that don't define any plugin interface
+        # ── Skip files that don't define any plugin interface ──
+        # ★ 必须在注册工具/钩子之前执行此检查，防止残留注册
         if not info.tools and not info.hook_names and not callable(getattr(info.module, 'execute', None)):
             _log.debug("Skipping '%s' – no TOOLS, hooks, or execute() defined", name)
             return  # not a plugin
 
+        # ── 通过了所有检查，现在才安全地注册工具和钩子 ──
+        resolved_name = info.name
+        execute_fn = getattr(info.module, "execute", None)
+
         with self._lock:
-            if info.name in self._plugins:
+            # ── 同名插件覆盖：先卸载旧版本的工具 & 钩子 ──
+            if resolved_name in self._plugins:
+                old_info = self._plugins[resolved_name]
                 _log.warning(
                     "Plugin '%s' (%s) overwrites previously loaded '%s'",
-                    info.name, info.path, self._plugins[info.name].path,
+                    resolved_name, info.path, old_info.path,
                 )
-            self._plugins[info.name] = info
+                # 移除旧工具
+                for old_tool in (old_info.tools or []):
+                    old_tname = old_tool.get("function", {}).get("name", "")
+                    if old_tname in self._tool_registry:
+                        del self._tool_registry[old_tname]
+                # 移除旧钩子
+                for hook_name in HOOK_NAMES:
+                    self._hooks[hook_name] = [
+                        (pn, fn) for (pn, fn) in self._hooks[hook_name]
+                        if pn != resolved_name
+                    ]
+
+            # 注册工具
+            for tool in info.tools:
+                func = tool.get("function", {})
+                tname = func.get("name", "")
+                if tname:
+                    # Guard against duplicate tool names — log warning, don't crash
+                    if tname in self._tool_registry:
+                        existing = self._tool_registry[tname][0]
+                        if existing != resolved_name:
+                            _log.warning(
+                                "Tool '%s' from plugin '%s' (%s) skipped: "
+                                "already registered by plugin '%s'",
+                                tname, resolved_name, info.path, existing,
+                            )
+                        continue
+                    self._tool_registry[tname] = (resolved_name, execute_fn)
+
+            # 注册钩子
+            for hook_name in info._hook_names:
+                fn = getattr(info.module, hook_name, None)
+                if callable(fn):
+                    # 去重：避免同一插件名+钩子名重复注册
+                    already = any(
+                        pn == resolved_name
+                        for pn, _ in self._hooks[hook_name]
+                    )
+                    if not already:
+                        self._hooks[hook_name].append((resolved_name, fn))
+
+            # 加入插件注册表
+            self._plugins[resolved_name] = info
 
     def _get_context(self, plugin_name: str) -> PluginContext:
         """Return (or lazily create) the PluginContext for *plugin_name*.

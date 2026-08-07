@@ -10,6 +10,8 @@ from typing import Any, Dict, Optional
 import win32crypt
 import keyring
 
+from agent_shared import is_loopback_url
+
 KEYRING_SERVICE = "vibe_agent"
 KEYRING_USER = "api_key"
 
@@ -54,12 +56,22 @@ class ConfigManager:
             "plugin_security_require_permissions": False,
             "plugin_security_resource_limit": False,
 
+            # 全量读取大文件开关（默认关闭）
+            # 关闭时，read_file 在不指定行范围的情况下读取 >100KB 文件将返回
+            # "文件过大，仅能部分读取" 并拒绝全量返回
+            "allow_full_read_large_files": False,
+
             # 异步架构：沙箱池 & 文件IO队列
             "sandbox_pool_max": 8,
             "sandbox_network_enabled": False,
             "file_io_queue_enabled": True,
             "lifecycle_zombie_scan_seconds": 5,
             "resource_terminal_reserved_pct": 40,
+
+            # 自定义系统提示词
+            "custom_system_prompt_enabled": False,
+            "custom_system_prompt": "",
+            "custom_system_prompt_file": "",
         }
 
     def load(self) -> Dict[str, Any]:
@@ -137,6 +149,10 @@ class ConfigManager:
         return defaults
 
     def validate_api_key(self, api_key: str, base_url: str = "https://api.deepseek.com") -> bool:
+        # 本地部署模式（BaseURL 指向回环地址）：Ollama 等本地服务无需鉴权，
+        # 跳过 /models 校验（本地服务通常没有该端点或不需要认证）。
+        if is_loopback_url(base_url):
+            return True
         try:
             from openai import OpenAI
             client = OpenAI(api_key=api_key, base_url=base_url)

@@ -30,11 +30,32 @@ body {
     flex-shrink: 0;
     height: 40px;
 }
+#header .header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
 #header h1 {
     font-size: 15px;
     font-weight: 600;
     color: #007aff;
     letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+#header .header-token-display {
+    font-size: 11px;
+    color: #666;
+    font-weight: 500;
+    white-space: nowrap;
+    background: #f0f0f0;
+    padding: 3px 10px;
+    border-radius: 10px;
+    user-select: text;
+    cursor: default;
+}
+#header .header-token-display:empty {
+    display: none;
 }
 #header .btn-group { display: flex; gap: 6px; }
 #header button {
@@ -513,6 +534,32 @@ body {
     overflow-y: auto;
     color: #333;
 }
+/* Settings modal: fixed footer */
+#settings-modal .modal-content {
+    display: flex;
+    flex-direction: column;
+    overflow-y: hidden;
+    padding: 20px 20px 0 20px;
+    max-height: 85vh;
+}
+#settings-modal .modal-body {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    padding-right: 4px;
+    padding-bottom: 8px;
+}
+#settings-modal .modal-footer {
+    flex-shrink: 0;
+    padding: 12px 0;
+    margin-top: 8px;
+    border-top: 1px solid #eee;
+    background: #fff;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+#settings-modal .modal-footer .btn-row { margin-top: 0; }
 .modal-content h2 { margin-bottom: 12px; font-size: 16px; }
 .modal-content h3 { margin-bottom: 8px; font-size: 13px; color: #555; }
 .modal-content label { display: block; margin: 8px 0 3px; font-size: 12px; color: #666; }
@@ -1449,7 +1496,10 @@ body {
 </div>
 
 <div id="header">
-    <h1 data-i18n="app_title">NORP Agent</h1>
+    <div class="header-left">
+        <h1 data-i18n="app_title">NORP Agent</h1>
+        <span class="header-token-display" id="header-tokens"></span>
+    </div>
     <div class="btn-group">
         <button id="about-btn" data-i18n="about">About</button>
         <button id="balance-btn" data-i18n="balance">Balance</button>
@@ -1531,6 +1581,7 @@ body {
 
 <div id="settings-modal" class="modal">
     <div class="modal-content">
+        <div class="modal-body">
         <h2 data-i18n="settings_title">Settings</h2>
 
         <!-- Language selector — placed at the very top -->
@@ -1677,7 +1728,37 @@ body {
         </div>
         <!-- end plugin-security-section -->
 
-        <div class="btn-row btn-row-between">
+        <!-- 自定义系统提示词 -->
+        <h3 style="margin-top:12px;">📝 自定义系统提示词</h3>
+        <div class="checkbox-row">
+            <input type="checkbox" id="cfg-custom-prompt-enabled">
+            <label for="cfg-custom-prompt-enabled">启用自定义系统提示词</label>
+        </div>
+        <div class="checkbox-desc">启用后将使用下方自定义提示词替换默认系统提示词。默认提示词包含工具调用说明和插件系统指南。</div>
+        <div id="custom-prompt-section" style="display:none;">
+            <label style="margin-top:8px;">提示词来源</label>
+            <select id="cfg-custom-prompt-source" style="width:100%;">
+                <option value="text">📝 手动输入</option>
+                <option value="file">📁 从文件导入（.md / .txt）</option>
+            </select>
+            <div id="custom-prompt-text-section" style="margin-top:6px;">
+                <label>提示词内容</label>
+                <textarea id="cfg-custom-prompt" style="width:100%;height:150px;max-height:300px;font-size:12px;font-family:monospace;padding:8px;border:1px solid #ccc;border-radius:4px;overflow-y:auto;resize:none;" placeholder="在此输入自定义系统提示词..."></textarea>
+            </div>
+            <div id="custom-prompt-file-section" style="display:none;margin-top:6px;">
+                <label>导入文件</label>
+                <div class="flex-row">
+                    <input type="text" id="cfg-custom-prompt-file" placeholder="未选择文件" style="flex:1;" readonly>
+                    <button class="btn-small" id="cfg-custom-prompt-browse">📂 浏览</button>
+                </div>
+                <span style="font-size:10px;color:#888;">支持 .md 和 .txt 格式</span>
+            </div>
+        </div>
+        <!-- end 自定义系统提示词 -->
+        </div>
+        <!-- end modal-body -->
+
+        <div class="btn-row" style="margin-top:16px; padding: 0 20px 20px;">
             <button class="btn-danger" id="settings-restore-defaults" data-i18n="restore_defaults">Restore Defaults</button>
             <div>
                 <button class="btn-secondary" id="settings-cancel" data-i18n="cancel">Cancel</button>
@@ -1881,6 +1962,7 @@ var I18N = {
         "plugins_reloaded": "插件已重新加载",
         "welcome_setup": "欢迎！设置完成。",
         "welcome_skip": "您可以稍后在设置中配置 API 密钥。",
+        "agent_running_confirm": "Agent正在运行，确定关闭吗？",
         "confirm_operation": "确认操作",
         "confirm_write_msg": "确定要{0} {1} 吗？",
         "confirm_delete_warn": "此操作不可逆，请谨慎操作。",
@@ -1959,6 +2041,7 @@ var I18N = {
         "polling_error": "轮询错误",
         "history_header": "以下为历史对话记忆，请不要回复该内容",
         "history_conversation": "历史对话",
+        "total_tokens": "累计 Tokens",
     },
     "zh_TW": {
         "app_title": "NORP Agent",
@@ -2077,6 +2160,7 @@ var I18N = {
         "plugins_reloaded": "外掛已重新載入",
         "welcome_setup": "歡迎！設定完成。",
         "welcome_skip": "您可以稍後在設定中配置 API 金鑰。",
+        "agent_running_confirm": "Agent正在執行，確定關閉嗎？",
         "confirm_operation": "確認操作",
         "confirm_write_msg": "確定要{0} {1} 嗎？",
         "confirm_delete_warn": "此操作無法復原，請謹慎操作。",
@@ -2155,6 +2239,7 @@ var I18N = {
         "polling_error": "輪詢錯誤",
         "history_header": "以下為歷史對話記憶，請不要回覆該內容",
         "history_conversation": "歷史對話",
+        "total_tokens": "累計 Tokens",
     },
     "en": {
         "app_title": "NORP Agent",
@@ -2273,6 +2358,7 @@ var I18N = {
         "plugins_reloaded": "Plugins reloaded",
         "welcome_setup": "Welcome! Setup complete.",
         "welcome_skip": "You can configure your API key later in Settings.",
+        "agent_running_confirm": "Agent is running. Are you sure you want to close this tab?",
         "confirm_operation": "Confirm Operation",
         "confirm_write_msg": "Are you sure you want to {0} {1}?",
         "confirm_delete_warn": "This action is irreversible. Please proceed with caution.",
@@ -2351,6 +2437,7 @@ var I18N = {
         "polling_error": "Polling error",
         "history_header": "The following is historical conversation memory. Do NOT reply to this content.",
         "history_conversation": "Conversation history",
+        "total_tokens": "Total Tokens",
     },
     "ru": {
         "app_title": "NORP Agent",
@@ -2469,6 +2556,7 @@ var I18N = {
         "plugins_reloaded": "Плагины перезагружены",
         "welcome_setup": "Добро пожаловать! Настройка завершена.",
         "welcome_skip": "Вы можете настроить API-ключ позже в Настройках.",
+        "agent_running_confirm": "Агент запущен. Вы уверены, что хотите закрыть эту вкладку?",
         "confirm_operation": "Подтверждение операции",
         "confirm_write_msg": "Вы уверены, что хотите {0} {1}?",
         "confirm_delete_warn": "Это действие необратимо. Будьте осторожны.",
@@ -2547,6 +2635,7 @@ var I18N = {
         "polling_error": "Ошибка опроса",
         "history_header": "Ниже приведена история разговора. НЕ отвечайте на это содержимое.",
         "history_conversation": "История разговора",
+        "total_tokens": "Всего токенов",
     },
     "ja": {
         "app_title": "NORP Agent",
@@ -2665,6 +2754,7 @@ var I18N = {
         "plugins_reloaded": "プラグインを再読み込みしました",
         "welcome_setup": "ようこそ！セットアップが完了しました。",
         "welcome_skip": "APIキーは後で設定から構成できます。",
+        "agent_running_confirm": "エージェントが実行中です。このタブを閉じてもよろしいですか？",
         "confirm_operation": "操作の確認",
         "confirm_write_msg": "{0} {1} してもよろしいですか？",
         "confirm_delete_warn": "この操作は元に戻せません。慎重に進めてください。",
@@ -2743,6 +2833,7 @@ var I18N = {
         "polling_error": "ポーリングエラー",
         "history_header": "以下は過去の会話の記憶です。この内容には返信しないでください。",
         "history_conversation": "会話履歴",
+        "total_tokens": "合計トークン",
     }
 };
 
@@ -2783,6 +2874,8 @@ function setLanguage(lang) {
             tel.title = t(tkey, lang);
         }
     }
+    // Update header token display (language may have changed)
+    updateHeaderTokensDisplay();
 }
 
 function tf(key, lang) {
@@ -2969,6 +3062,9 @@ function switchToTab(uiId) {
 
     // Update token display for the newly active tab
     updateTokenDisplay(newTab.totalTokens);
+    // Recalculate header grand total (sum of all tabs)
+    recalcGrandTotalTokens();
+    updateHeaderTokensDisplay();
 
     // Update status bar and workspace display
     updateWorkspaceDisplay(newTab.workspace);
@@ -3020,6 +3116,13 @@ function closeTab(uiId) {
     var tab = getTab(uiId);
     if (!tab) return;
 
+    // Check if this tab has a running agent task
+    if (tab.isStreaming) {
+        if (!confirm(t('agent_running_confirm') || 'Agent正在运行，确定关闭吗？')) {
+            return;
+        }
+    }
+
     // Stop any running task on this tab
     if (tab.dbId) {
         try { window.pywebview.api.stop_task(tab.dbId); } catch(e) {}
@@ -3052,6 +3155,10 @@ function closeTab(uiId) {
     }
 
     updateTabBar();
+
+    // Recalculate header token total after tab removal
+    recalcGrandTotalTokens();
+    updateHeaderTokensDisplay();
 }
 
 function updateTabBar() {
@@ -3260,6 +3367,9 @@ var stopBtn = document.getElementById('stop-btn');
 var fileBadges = document.getElementById('file-badges');
 var statusText = document.getElementById('status-text');
 var tokenDisplay = document.getElementById('token-display');
+var headerTokensEl = document.getElementById('header-tokens');
+// Grand total tokens across all sessions (persists across tab switches)
+var grandTotalTokens = { input: 0, output: 0, tool: 0 };
 var settingsModal = document.getElementById('settings-modal');
 var apikeyModal = document.getElementById('apikey-modal');
 var aboutModal = document.getElementById('about-modal');
@@ -3299,6 +3409,17 @@ function updateTokenDisplay(usage, optTab) {
         if (usage.tool_call_tokens !== undefined) tab.totalTokens.tool = usage.tool_call_tokens;
     }
 
+    // Update header grand total — sum of ALL tabs' totalTokens
+    if (usage) {
+        var prevInput = grandTotalTokens.input;
+        var prevOutput = grandTotalTokens.output;
+        var prevTool = grandTotalTokens.tool;
+        recalcGrandTotalTokens();
+        if (grandTotalTokens.input !== prevInput || grandTotalTokens.output !== prevOutput || grandTotalTokens.tool !== prevTool) {
+            updateHeaderTokensDisplay();
+        }
+    }
+
     // Only update the global token display if this is the active tab
     if (tab.uiId !== activeTabId) return;
 
@@ -3314,6 +3435,32 @@ function updateTokenDisplay(usage, optTab) {
         parts.push('<span class="tok-tool">' + tab.totalTokens.tool.toLocaleString() + '</span> tool');
     parts.push('= <span class="tok-total">' + grandTotal.toLocaleString() + '</span>');
     tokenDisplay.innerHTML = 'Tokens: ' + parts.join(' + ');
+}
+
+function updateHeaderTokensDisplay() {
+    if (!headerTokensEl) return;
+    var total = grandTotalTokens.input + grandTotalTokens.output + grandTotalTokens.tool;
+    if (total <= 0) {
+        headerTokensEl.textContent = '';
+        return;
+    }
+    headerTokensEl.textContent = t('total_tokens') + ': ' + total.toLocaleString();
+}
+
+// Recalculate grand total tokens by summing all tabs' per-session totals
+function recalcGrandTotalTokens() {
+    var input = 0, output = 0, tool = 0;
+    for (var i = 0; i < tabs.length; i++) {
+        var tt = tabs[i].totalTokens;
+        if (tt) {
+            input += tt.input || 0;
+            output += tt.output || 0;
+            tool += tt.tool || 0;
+        }
+    }
+    grandTotalTokens.input = input;
+    grandTotalTokens.output = output;
+    grandTotalTokens.tool = tool;
 }
 
 function updateWorkspaceDisplay(workspace) {
@@ -3332,6 +3479,8 @@ function resetTokenDisplay() {
     var tab = getActiveTab();
     if (tab) tab.totalTokens = { input: 0, output: 0, tool: 0 };
     tokenDisplay.innerHTML = '';
+    recalcGrandTotalTokens();
+    updateHeaderTokensDisplay();
 }
 
 var SCROLL_THRESHOLD = 80;
@@ -4658,6 +4807,14 @@ async function openSettings() {
     document.getElementById('cfg-security-resource-limit').checked = config.plugin_security_resource_limit || false;
     renderSecurityAuditSummary();
 
+    // Custom system prompt
+    document.getElementById('cfg-custom-prompt-enabled').checked = config.custom_system_prompt_enabled || false;
+    document.getElementById('cfg-custom-prompt-source').value = config.custom_system_prompt_file ? 'file' : 'text';
+    document.getElementById('cfg-custom-prompt').value = config.custom_system_prompt || '';
+    document.getElementById('cfg-custom-prompt-file').value = config.custom_system_prompt_file || '';
+    updateCustomPromptVisibility();
+    updateCustomPromptSource();
+
     updateQueueWarning();
     setLanguage(currentLang);
     settingsModal.style.display = 'block';
@@ -4684,6 +4841,47 @@ function updatePluginVisibility() {
     var pluginSecuritySection = document.getElementById('plugin-security-section');
     if (pluginSection) pluginSection.style.display = enabled ? 'block' : 'none';
     if (pluginSecuritySection) pluginSecuritySection.style.display = enabled ? 'block' : 'none';
+}
+
+// ── Custom system prompt visibility ──
+function updateCustomPromptVisibility() {
+    var enabled = document.getElementById('cfg-custom-prompt-enabled').checked;
+    var section = document.getElementById('custom-prompt-section');
+    if (section) section.style.display = enabled ? 'block' : 'none';
+}
+
+// ── Custom prompt source toggle (file vs text) ──
+function updateCustomPromptSource() {
+    var source = document.getElementById('cfg-custom-prompt-source').value;
+    var textSection = document.getElementById('custom-prompt-text-section');
+    var fileSection = document.getElementById('custom-prompt-file-section');
+    if (textSection) textSection.style.display = source === 'text' ? 'block' : 'none';
+    if (fileSection) fileSection.style.display = source === 'file' ? 'block' : 'none';
+}
+
+// ── Browse for custom prompt file ──
+async function browseCustomPromptFile() {
+    try {
+        var path = await window.pywebview.api.pick_file('Markdown / Text (*.md;*.txt)');
+        if (path) {
+            document.getElementById('cfg-custom-prompt-file').value = path;
+            // Read file content
+            try {
+                var content = await window.pywebview.api.read_text_file(path);
+                if (content) {
+                    document.getElementById('cfg-custom-prompt').value = content;
+                }
+            } catch(e) {
+                // File path is set but content couldn't be auto-loaded
+            }
+        }
+    } catch(e) {
+        // Fallback: manual path entry
+        var path = prompt('请输入提示词文件路径（.md / .txt）：');
+        if (path) {
+            document.getElementById('cfg-custom-prompt-file').value = path;
+        }
+    }
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -4716,6 +4914,22 @@ document.addEventListener('DOMContentLoaded', function() {
     if (pluginsToggle) {
         pluginsToggle.addEventListener('change', updatePluginVisibility);
     }
+
+    // Custom system prompt toggle
+    var customPromptToggle = document.getElementById('cfg-custom-prompt-enabled');
+    if (customPromptToggle) {
+        customPromptToggle.addEventListener('change', updateCustomPromptVisibility);
+    }
+    // Custom prompt source toggle
+    var customPromptSource = document.getElementById('cfg-custom-prompt-source');
+    if (customPromptSource) {
+        customPromptSource.addEventListener('change', updateCustomPromptSource);
+    }
+    // Browse button for custom prompt file
+    var browseBtn = document.getElementById('cfg-custom-prompt-browse');
+    if (browseBtn) {
+        browseBtn.addEventListener('click', browseCustomPromptFile);
+    }
 });
 
 async function saveSettings() {
@@ -4747,6 +4961,9 @@ async function saveSettings() {
         plugin_security_import_restrict: document.getElementById('cfg-security-import-restrict').value,
         plugin_security_require_permissions: document.getElementById('cfg-security-permissions').checked,
         plugin_security_resource_limit: document.getElementById('cfg-security-resource-limit').checked,
+        custom_system_prompt_enabled: document.getElementById('cfg-custom-prompt-enabled').checked,
+        custom_system_prompt: document.getElementById('cfg-custom-prompt').value,
+        custom_system_prompt_file: document.getElementById('cfg-custom-prompt-file').value,
     };
 
     try {
@@ -4805,6 +5022,14 @@ async function restoreDefaults() {
         document.getElementById('cfg-security-permissions').checked = config.plugin_security_require_permissions || false;
         document.getElementById('cfg-security-resource-limit').checked = config.plugin_security_resource_limit || false;
         renderSecurityAuditSummary();
+
+        // Custom system prompt reset
+        document.getElementById('cfg-custom-prompt-enabled').checked = false;
+        document.getElementById('cfg-custom-prompt').value = '';
+        document.getElementById('cfg-custom-prompt-file').value = '';
+        document.getElementById('cfg-custom-prompt-source').value = 'text';
+        updateCustomPromptVisibility();
+        updateCustomPromptSource();
 
         updateThinkMutualExclusion();
         updateQueueWarning();
@@ -5597,6 +5822,21 @@ window.addEventListener('pywebviewready', async function() {
 
         // New tab button
         document.getElementById('new-tab-btn').addEventListener('click', createNewTab);
+
+        // ── Initialize header token display from backend ──
+        try {
+            var totalUsage = await window.pywebview.api.get_total_usage(firstSessionId);
+            if (totalUsage && (totalUsage.input_tokens || totalUsage.output_tokens || totalUsage.tool_call_tokens)) {
+                // Sync Tab 1's totalTokens so recalcGrandTotalTokens() won't zero out the header
+                firstTab.totalTokens.input = totalUsage.input_tokens || 0;
+                firstTab.totalTokens.output = totalUsage.output_tokens || 0;
+                firstTab.totalTokens.tool = totalUsage.tool_call_tokens || 0;
+                recalcGrandTotalTokens();
+                updateHeaderTokensDisplay();
+            }
+        } catch(e) {
+            // Silently ignore — token display is non-critical
+        }
 
     } catch(e) {
         config = {};

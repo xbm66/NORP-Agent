@@ -2,14 +2,96 @@
 # 从 loop.py 和 async_loop.py 提取公共代码，消除 DRY 重复
 # Copyright (c) 2026 xingluosama
 
+import urllib.parse
 from datetime import datetime
 from typing import List, Dict, Optional
 
 from tools import BUILTIN_TOOLS
 
+# 本机回环主机名集合（大小写不敏感，统一小写比较）
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "::"}
 
-def build_system_prompt(project_root: str, enable_web_search: bool) -> str:
-    """构建系统提示词（loop.py / async_loop.py 共用）。"""
+
+def is_loopback_url(url: str) -> bool:
+    """判断 URL 是否指向本机回环地址（localhost / 127.0.0.1 / ::1 等）。
+
+    用于自动识别本地部署的大模型服务（Ollama、LM Studio、vLLM 等）：
+    只要 API Base URL 指向回环地址，即视为"本地部署模式"。
+
+    支持：
+    - 带 scheme：http://localhost:11434/v1、http://127.0.0.1:11434/v1
+    - 不带 scheme：localhost:11434/v1、127.0.0.1:11434/v1
+    - 整个 127.0.0.0/8 回环网段（127.x.x.x）
+    - IPv6 回环 ::1
+    """
+    if not url or not isinstance(url, str):
+        return False
+    url = url.strip()
+    if not url:
+        return False
+    # 兼容无 scheme 的写法（如 "localhost:11434"）
+    if "://" not in url:
+        url = "http://" + url
+    try:
+        host = urllib.parse.urlparse(url).hostname or ""
+    except ValueError:
+        return False
+    host = host.strip().lower().rstrip(".")
+    if not host:
+        return False
+    if host in _LOOPBACK_HOSTS:
+        return True
+    # 127.0.0.0/8 整个回环网段
+    if host.startswith("127."):
+        parts = host.split(".")
+        if len(parts) == 4 and all(p.isdigit() for p in parts):
+            return True
+    return False
+
+
+def plugin_has_tool(plugin_manager, tool_name: str) -> bool:
+    """判断插件系统中是否注册了指定工具（用于提示词注入）。"""
+    if not plugin_manager:
+        return False
+    try:
+        return any(
+            t.get("function", {}).get("name") == tool_name
+            for t in plugin_manager.get_tools()
+        )
+    except Exception:
+        return False
+
+
+def build_system_prompt(project_root: str, enable_web_search: bool,
+                        has_context_retriever: bool = False,
+                        has_file_searcher: bool = False,
+                        has_file_surgeon: bool = False,
+                        plugin_tool_names: Optional[List[str]] = None,
+                        custom_prompt: Optional[str] = None) -> str:
+    """构建系统提示词（loop.py / async_loop.py 共用）。
+
+    has_context_retriever / has_file_searcher / has_file_surgeon 为 True 时
+    追加对应插件工具的使用指南。模型是提示词驱动的，仅提供工具 schema 不足以
+    让它主动使用插件工具，必须在提示词中说明使用时机和优先规则。
+    
+    custom_prompt: 如果提供非空字符串，将完全替换默认系统提示词。
+                   环境信息（时间、工作区）会自动预先注入。
+    """
+    # 如果提供了自定义提示词，使用自定义的（自动注入环境信息）
+    if custom_prompt and custom_prompt.strip():
+        now = datetime.now()
+        date_str = now.strftime("%Y年%m月%d日 %H:%M:%S")
+        weekday_str = ["一", "二", "三", "四", "五", "六", "日"][now.weekday()]
+        env_info = (
+            f"[环境]\n"
+            f"当前系统时间：{date_str}（周{weekday_str}）\n"
+            f"工作区根目录：{project_root}\n\n"
+        )
+        # 如果自定义提示词已包含 [环境] 段则不再重复
+        if "[环境]" in custom_prompt:
+            return custom_prompt.strip()
+        return env_info + custom_prompt.strip()
+    
     now = datetime.now()
     date_str = now.strftime("%Y年%m月%d日 %H:%M:%S")
     weekday_str = ["一", "二", "三", "四", "五", "六", "日"][now.weekday()]
@@ -25,19 +107,46 @@ def build_system_prompt(project_root: str, enable_web_search: bool) -> str:
         "- 主动探索：不确定项目结构时，先用 list_dir 了解目录布局\n"
         "- 批量操作：多个无依赖的工具调用应在一次响应中并行发起\n"
         "- 最小权限：只创建必要的文件，只安装声明的依赖\n"
-        "- 精准修改：优先使用 replace_in_file 进行针对性编辑，避免用 write_file 重写整个文件，以节省 token\n\n"
-        "[安全约束]\n"
+        "- 精准修改：优先使用 replace_in_file 进行针对性编辑，避免用 write_file 重写整个文件，以节省 token\n"
+    )
+
+    # ── 超大文件处理原则（仅当有相应插件时注入）──
+    if has_file_searcher or has_file_surgeon:
+        prompt += (
+            "\n[超大文件处理原则 — 必须遵守，违反将导致天价 token 账单]\n"
+        )
+        if has_file_searcher:
+            prompt += (
+                "- ⛔ 严禁对超过 100KB 的文件使用 read_file 全量读取！\n"
+                "- ✅ 先用 search_large_file 流式检索定位目标行号\n"
+                "- ✅ 再用 read_file(start_line, end_line) 按行范围精确读取需要的片段\n"
+                "- ✅ 多文件检索时先用 index_workspace 建索引，再用 search_files 毫秒级搜索\n"
+                "- ✅ 不确定文件大小时，先用 list_dir 查看文件大小再决定策略\n"
+            )
+        if has_file_surgeon:
+            prompt += (
+                "- ⛔ 严禁用 read_file 全量读取后 write_file 全量写入！\n"
+                "- ✅ 修改文件时优先用 surgical_scan 定位目标行\n"
+                "- ✅ 然后用 surgical_replace(line_number=...) 精确替换单行\n"
+                "- ✅ 手术前先用 dry_run=true 预览，确认无误后再执行\n"
+            )
+        prompt += (
+            "- 💸 核心原则：只把需要看的内容加载到上下文，不要加载整个文件。\n"
+        )
+
+    prompt += (
+        "\n[安全约束]\n"
         "- 删除文件或目录前，必须调用 ask_user 获得用户确认\n"
         "- 执行 shell 命令时禁止 sudo、rm -rf /、mkfs 等危险操作\n"
         "- 所有文件路径限定在工作区根目录内，不得包含 .. 或绝对系统路径\n\n"
         "[任务完成]\n"
         "任务完成时调用 task_done，传入总结和涉及的主要代码路径，系统自动写入历史记录。\n\n"
         "[可用工具]\n"
-        "read_file(path, start_line?, end_line?): 读取文件内容。可指定行范围只读取需要的代码片段，节省 token。\n"
+        "read_file(path, start_line?, end_line?): 读取文件内容。可指定行范围只读取需要的代码片段，节省 token。⚠️ 大文件（>100KB）必须先用 search_large_file / surgical_scan 定位行号，再按行范围读取，禁止全量读取。\n"
         "write_file(path, content): 创建或覆盖文件。覆盖前建议先 read_file 备份原内容。\n"
         "replace_in_file(path, old_str, new_str): 替换文件中的指定文本片段。old_str 必须精确匹配文件中唯一一处。若匹配多处则报错，需提供更多上下文以唯一确定。用于针对性修改，避免重写整个文件。\n"
         "list_dir(path?): 列出目录内容，用于了解项目结构。\n"
-        "search_in_files(pattern, path?): 在文件中搜索文本模式。\n"
+        "search_in_files(pattern, path?): 在文件中搜索文本模式。仅适合小型项目全局搜索，大文件请用 search_large_file。\n"
         "delete_file(path): 删除文件或目录。不可逆操作，执行前应请求用户确认。\n"
         "exec_cmd(command, timeout?): 执行 shell 命令。禁止 sudo、rm -rf / 等危险操作。对不确定的命令先加 --dry-run 预览。\n"
         "init_project(type, name): 脚手架初始化新项目，自动创建目录结构。\n"
@@ -51,6 +160,65 @@ def build_system_prompt(project_root: str, enable_web_search: bool) -> str:
     )
     if enable_web_search:
         prompt += "web_search(query): 联网搜索实时信息，适用于需要最新数据的场景。\n"
+
+    # ── 插件工具（动态注入）──
+    if has_file_searcher:
+        prompt += (
+            "\n[超大文件检索工具 — 优先使用，避免全量读取]\n"
+            "search_large_file(path, query, regex?, case_sensitive?, line_context?, max_matches?, encoding?): "
+            "对单个超大文件（最高 1GB+）流式精确检索，零索引、内存恒定。返回精确行号和上下文。\n"
+            "  ⚠️ 使用时机：查看日志/数据/导出文件等 100KB+ 文件时，必须用此工具替代 read_file 全量读取。\n"
+            "search_files(query, path?, file_pattern?, case_sensitive?, exact_phrase?, top_k?, max_lines_per_file?, line_context?): "
+            "在已索引的工作区文件中毫秒级精确检索，返回文件路径+行号+上下文。\n"
+            "  ⚠️ 使用时机：多文件代码库中搜索内容时，比 search_in_files 快 100 倍且自动定位行号。\n"
+            "index_workspace(directory?, include_patterns?, exclude_dirs?, max_file_mb?, force?): "
+            "扫描并索引工作区文件（增量更新），后续可用 search_files 秒级检索。\n"
+            "  ⚠️ 使用时机：首次使用 search_files 前必须先建索引（只需一次，后续自动增量）。\n"
+            "find_files(name_pattern, path?, top_k?): 按文件名/glob 模糊检索，如 find_files('*config*')。\n"
+            "workspace_index_status(): 查看索引统计（文件数、字符数、状态分布）。\n"
+            "clear_workspace_index(path?): 清理索引（按文件/目录或全部清空）。\n"
+        )
+    if has_file_surgeon:
+        prompt += (
+            "\n[分子手术刀工具 — 精确修改超大文件中的某一行]\n"
+            "surgical_scan(file_path, pattern, use_regex?, line_start?, line_end?, context_lines?, max_matches?, encoding?): "
+            "手术前扫描：在超大文件中搜索匹配行，返回行号+上下文预览。先定位再下刀。\n"
+            "  ⚠️ 使用时机：需要修改某个大文件中的特定行时，先用它找到目标行号。\n"
+            "surgical_replace(file_path, line_number?, old_content?, new_content?, mode?, use_regex?, count?, dry_run?, context_lines?, backup?, encoding?): "
+            "分子手术刀：按行号/内容精确替换/插入/删除超大文件中的行。流式读写，1GB 文件内存 < 50MB。\n"
+            "  ⚠️ 使用时机：修改文件中的特定行时优先使用（而不是 read_file 全量 + write_file 全量）。\n"
+            "  ⚠️ 安全规则：正式操作前必须先 dry_run=true 预览，确认目标行正确后再 dry_run=false 执行。\n"
+        )
+    if has_context_retriever:
+        prompt += (
+            "\n[上下文检索工具]\n"
+            "search_context(query, top_k?, min_score?, source_filter?, expand_context?): "
+            "在已索引的上下文库中精确检索早期对话、历史工具输出和长文档内容（BM25 全文检索）。\n"
+            "  ⚠️ 使用时机：用户问题涉及早期会话内容、或当前上下文中缺少所需信息时，"
+            "必须先调用 search_context 检索再回答，禁止凭空猜测。\n"
+            "index_context(content?, source?, title?, chunk_size?, chunk_overlap?): "
+            "将长文本/外部文档加入检索索引，供后续精确检索。\n"
+            "index_stats(): 不确定索引中是否有数据时，先调用它确认可用来源。\n"
+        )
+    # ── 其他插件工具（动态注入，告知模型这些工具可用）──
+    if plugin_tool_names:
+        # 排除已在专用段落中详细说明的工具
+        _already_documented = {
+            "search_large_file", "search_files", "index_workspace",
+            "find_files", "workspace_index_status", "clear_workspace_index",
+            "surgical_scan", "surgical_replace",
+            "search_context", "index_context", "index_stats",
+        }
+        _other_tools = [n for n in plugin_tool_names if n not in _already_documented]
+        if _other_tools:
+            prompt += (
+                "\n[插件扩展工具 — 以下工具由插件系统提供，按需调用]\n"
+            )
+            for tname in sorted(_other_tools):
+                prompt += f"- {tname}: 插件扩展工具，参数详见工具 schema。\n"
+            prompt += (
+                "  ⚠️ 使用时机：上述工具已注册到工具列表，模型可在适当场景直接调用。\n"
+            )
     prompt += (
         "\n[输出规范]\n"
         "- 调用工具时系统自动处理格式，你只需正常推理和决策\n"
@@ -67,10 +235,67 @@ def build_system_prompt(project_root: str, enable_web_search: bool) -> str:
     return prompt
 
 
+# ── 历史消息裁剪 ──
+# 历史总字符数超过该阈值（≈8000 tokens）时触发裁剪，防止上下文膨胀
+HISTORY_TRIM_THRESHOLD_CHARS = 24000
+# 裁剪后保留的最近对话字符数
+HISTORY_KEEP_CHARS = 12000
+
+
+def _trim_history(history: List[Dict]):
+    """超长历史裁剪：从尾部保留最近对话的完整语义组。
+
+    以 assistant 消息为组边界（其后的 tool 消息并入同组），
+    保证 tool 消息不会与其 assistant 分离（避免 API 报
+    tool_call_id 找不到对应消息）。
+
+    Returns
+    -------
+    (kept, trimmed)
+        kept: 裁剪后的历史列表；trimmed: 是否发生了裁剪。
+    """
+    total = sum(len(str(m.get("content", ""))) for m in history)
+    if total <= HISTORY_TRIM_THRESHOLD_CHARS:
+        return history, False
+
+    # 分组：assistant 开启新组，后续 tool 消息并入
+    groups: List[List[Dict]] = []
+    current: List[Dict] = []
+    for m in history:
+        if m.get("role") == "assistant" and current:
+            groups.append(current)
+            current = []
+        current.append(m)
+    if current:
+        groups.append(current)
+
+    # 从尾部向前保留组，直到超出 keep 预算
+    kept_groups: List[List[Dict]] = []
+    used = 0
+    for g in reversed(groups):
+        has_tool = any(m.get("role") == "tool" for m in g)
+        has_assistant = any(m.get("role") == "assistant" for m in g)
+        if has_tool and not has_assistant:
+            continue  # 孤立 tool 组（配对已裁掉）直接丢弃
+        size = sum(len(str(m.get("content", ""))) for m in g)
+        if kept_groups and used + size > HISTORY_KEEP_CHARS:
+            break
+        kept_groups.append(g)
+        used += size
+    kept_groups.reverse()
+
+    kept = [m for g in kept_groups for m in g]
+    return kept, len(kept) < len(history)
+
+
 def build_full_messages(user_message: str, project_root: str,
                          enable_web_search: bool,
                          history: Optional[List[Dict]] = None,
-                         memory_content: str = "") -> list:
+                         memory_content: str = "",
+                         has_context_retriever: bool = False,
+                         has_file_searcher: bool = False,
+                         has_file_surgeon: bool = False,
+                         plugin_tool_names: Optional[List[str]] = None) -> list:
     """构建完整的消息列表（loop.py / async_loop.py 共用）。
 
     核心策略：
@@ -82,7 +307,12 @@ def build_full_messages(user_message: str, project_root: str,
     6. 注入持久化记忆
     """
     current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
-    system_prompt = build_system_prompt(project_root, enable_web_search)
+    system_prompt = build_system_prompt(
+        project_root, enable_web_search,
+        has_context_retriever=has_context_retriever,
+        has_file_searcher=has_file_searcher,
+        has_file_surgeon=has_file_surgeon,
+        plugin_tool_names=plugin_tool_names)
 
     full_messages = [{"role": "system", "content": system_prompt}]
 
@@ -95,6 +325,16 @@ def build_full_messages(user_message: str, project_root: str,
     })
 
     if history:
+        history, _trimmed = _trim_history(history)
+        if _trimmed:
+            full_messages.append({
+                "role": "system",
+                "content": (
+                    "[历史裁剪提示] 早期对话超出上下文预算，已省略。\n"
+                    "如需回忆早期内容：若可用 search_context 工具，请先检索再回答；"
+                    "否则请如实告知用户信息不在当前上下文中。"
+                )
+            })
         for m in history:
             role = m.get("role", "")
             if role == "user":

@@ -2,6 +2,7 @@
 # Copyright (c) 2026 xingluosama
 
 import os
+import sys
 import json
 import asyncio
 import base64
@@ -15,9 +16,16 @@ from config import ConfigManager
 from event_queue import EventQueue
 from loop import AgentLoop  # 保留旧版兼容
 from async_loop import AsyncAgentLoop
+from agent_shared import is_loopback_url
 from plugin_system.manager import PluginManager
 from lifecycle_manager import get_lifecycle_manager
 from sandbox_pool import get_sandbox_pool
+
+# 应用基础目录（main.py / api.py 所在目录，也是 official_plugins/ 的父目录）
+if getattr(sys, 'frozen', False):
+    _APP_BASE_DIR = sys._MEIPASS
+else:
+    _APP_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 import json
 
@@ -191,7 +199,8 @@ class AgentAPI:
 
         # ── Plugin system ──
         cfg = self.config_manager.load()
-        plugin_dirs = cfg.get("plugin_dirs", [])
+        plugin_dirs = self._resolve_plugin_dirs(cfg.get("plugin_dirs", []))
+
         self.plugin_manager = PluginManager(
             plugin_dirs=plugin_dirs,
             app_dir=app_dir,
@@ -315,7 +324,10 @@ class AgentAPI:
     def _create_loop(self, session: Session):
         cfg = self.config_manager.load()
         api_key = self.config_manager.get_api_key()
-        if not api_key:
+        base_url = cfg.get("api_base", "https://api.deepseek.com")
+        # 本地部署模式（BaseURL 指向回环地址）无需 API Key——
+        # Ollama / LM Studio 等本地服务不做鉴权，AsyncAgentLoop 内部会使用占位 key。
+        if not api_key and not is_loopback_url(base_url):
             raise RuntimeError("API key not configured")
         session.event_queue = EventQueue(max_size=cfg.get("queue_max_size", 2000))
 
@@ -335,10 +347,12 @@ class AgentAPI:
 
         # Reload plugins if dirs or enabled state changed
         if cfg.get("plugins_enabled", True):
-            current_dirs = set(self.plugin_manager.plugin_dirs)
-            new_dirs = set(cfg.get("plugin_dirs", []))
+            _reload_dirs = self._resolve_plugin_dirs(cfg.get("plugin_dirs", []))
+            # Compare using realpath to avoid spurious reloads from case/separator differences
+            current_dirs = set(os.path.realpath(d) for d in self.plugin_manager.plugin_dirs)
+            new_dirs = set(os.path.realpath(d) for d in _reload_dirs)
             if current_dirs != new_dirs:
-                self.plugin_manager.set_plugin_dirs(cfg.get("plugin_dirs", []))
+                self.plugin_manager.set_plugin_dirs(_reload_dirs)
         else:
             self.plugin_manager.set_plugin_dirs([])
 
@@ -359,6 +373,8 @@ class AgentAPI:
             task_timeout=cfg.get("task_timeout", 0),
             plugin_manager=self.plugin_manager,
             use_responses_api=cfg.get("use_responses_api", True),
+            allow_full_read_large_files=cfg.get("allow_full_read_large_files", False),
+            custom_system_prompt=cfg.get("custom_system_prompt", "") if cfg.get("custom_system_prompt_enabled", False) else "",
         )
 
     def send_message(self, session_id: str, text: str) -> str:
@@ -465,16 +481,20 @@ class AgentAPI:
         base_url = cfg.get("api_base", "https://api.deepseek.com")
         if not key:
             return "error:API key is empty"
-        if not self.config_manager.validate_api_key(key, base_url):
+        # 本地部署模式（回环地址）跳过 API Key 校验
+        if not is_loopback_url(base_url) and not self.config_manager.validate_api_key(key, base_url):
             return "error:Invalid API key"
         self.config_manager.set_api_key(key)
         return "ok"
 
     def validate_api_key(self, key: str, base_url: str) -> str:
-        if not key or not key.strip():
+        if not key and not is_loopback_url(base_url):
             return "error:API key is empty"
         if not base_url or not base_url.strip():
             base_url = "https://api.deepseek.com"
+        # 本地部署模式：无需真实鉴权，直接通过（本地服务通常无 /models 校验端点）
+        if is_loopback_url(base_url):
+            return "ok"
         try:
             if self.config_manager.validate_api_key(key.strip(), base_url.strip()):
                 return "ok"
@@ -482,6 +502,46 @@ class AgentAPI:
                 return "error:Invalid API key or base URL"
         except Exception as e:
             return f"error:{str(e)}"
+
+    def is_local_mode(self, base_url: str) -> dict:
+        """前端查询：判断 Base URL 是否启用本地部署模式。
+
+        返回本地模式状态、是否识别为 Ollama，以及建议使用的模型。
+        """
+        try:
+            from openai import OpenAI
+            local = is_loopback_url(base_url)
+            info = {
+                "local_mode": local,
+                "is_ollama": False,
+                "suggested_model": "",
+            }
+            if not local:
+                return info
+            # 探测 Ollama 并获取可用模型列表（非阻塞，失败静默）
+            key = self.config_manager.get_api_key() or "ollama"
+            try:
+                client = OpenAI(api_key=key, base_url=base_url)
+                models = client.models.list()
+                info["suggested_model"] = (
+                    models.data[0].id if models.data else ""
+                )
+                import requests
+                resp = requests.get(
+                    base_url.rstrip("/") + "/api/tags",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=2,
+                )
+                info["is_ollama"] = (
+                    resp.status_code == 200
+                    and isinstance(resp.json(), dict)
+                    and "models" in resp.json()
+                )
+            except Exception:
+                pass
+            return info
+        except Exception:
+            return {"local_mode": is_loopback_url(base_url), "is_ollama": False}
 
     def log_frontend_error(self, text: str) -> str:
         try:
@@ -516,6 +576,34 @@ class AgentAPI:
             if result and len(result) > 0:
                 return result[0]
             return ""
+        except Exception:
+            return ""
+
+    def pick_file(self, file_types: str = "") -> str:
+        """打开文件选择对话框，返回选中文件路径。file_types 如 'Markdown (*.md;*.txt)'"""
+        import webview
+        try:
+            types = ("All Files (*.*)",)
+            if file_types:
+                types = (file_types, "All Files (*.*)")
+            result = webview.windows[0].create_file_dialog(
+                webview.FileDialog.OPEN,
+                directory=self.config_manager.load().get("project_root", ""),
+                file_types=types
+            )
+            if result and len(result) > 0:
+                return result[0]
+            return ""
+        except Exception:
+            return ""
+
+    def read_text_file(self, path: str) -> str:
+        """读取文本文件内容并返回。"""
+        try:
+            if not os.path.isfile(path):
+                return ""
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
         except Exception:
             return ""
 
@@ -556,13 +644,28 @@ class AgentAPI:
 
     def get_models_with_base(self, base_url: str) -> list:
         key = self.config_manager.get_api_key()
+        # 本地部署模式（回环地址）：无需真实 API Key，使用占位 key
         if not key:
-            return {"error": "API key not configured"}
+            if is_loopback_url(base_url):
+                key = "ollama"
+            else:
+                return {"error": "API key not configured"}
         try:
             from openai import OpenAI
             client = OpenAI(api_key=key, base_url=base_url)
             models = client.models.list()
-            return [{"id": m.id} for m in models.data]
+            result = [{"id": m.id} for m in models.data]
+            if result:
+                return result
+            # /v1/models 返回空列表：本地服务（Qwen / llama.cpp 等）可能不支持
+            # 返回当前配置的模型，至少保持可用
+            if is_loopback_url(base_url):
+                current_model = self.config_manager.load().get("model", "")
+                if current_model:
+                    return [{"id": current_model}]
+                # 提供常见本地模型名作为回退
+                return [{"id": "gpt-3.5-turbo"}, {"id": "qwen"}, {"id": "local-model"}]
+            return []
         except Exception as e:
             error_msg = str(e)
             if hasattr(e, 'response') and e.response:
@@ -571,6 +674,13 @@ class AgentAPI:
                     error_msg = error_data.get('error', {}).get('message', str(e))
                 except:
                     pass
+            # 本地模式下 /v1/models 不可用时，提供回退模型列表
+            if is_loopback_url(base_url):
+                current_model = self.config_manager.load().get("model", "")
+                fallback = [{"id": current_model}] if current_model else []
+                if not fallback:
+                    fallback = [{"id": "gpt-3.5-turbo"}, {"id": "qwen"}, {"id": "local-model"}]
+                return fallback
             return {"error": error_msg}
 
     def upload_files(self, files_data: list) -> list:
@@ -643,6 +753,48 @@ class AgentAPI:
     def get_plugin_dirs(self) -> list:
         return self.plugin_manager.plugin_dirs
 
+    def _resolve_plugin_dirs(self, dirs: list) -> list:
+        """Always include official_plugins, deduplicate by realpath.
+        Filters out non-existent directories and stale paths from old sessions.
+
+        This single funnel ensures *every* code path that sets plugin dirs
+        consistently includes the official built-in plugins.  Without this,
+        API methods like reload_plugins / add_plugin_dir would silently
+        drop official plugins, causing a wasteful unload→reload cycle the
+        next time send_message ran.
+        """
+        resolved: List[str] = []
+        _official_dir = os.path.join(_APP_BASE_DIR, "official_plugins")
+        _official_real = os.path.realpath(_official_dir) if os.path.isdir(_official_dir) else ""
+
+        # 先规范化所有用户配置的目录，并过滤不存在的 + 与 official_plugins 重复的
+        for d in dirs:
+            if not d or not isinstance(d, str):
+                continue
+            # 解析相对路径（相对于 app_dir）
+            if not os.path.isabs(d):
+                d = os.path.join(self.app_dir, d)
+            d = os.path.normpath(d)
+            # 跳过不存在的目录（例如上次会话遗留的路径）
+            if not os.path.isdir(d):
+                continue
+            d_real = os.path.realpath(d)
+            # 跳过与 official_plugins 相同物理路径的目录
+            if _official_real and d_real == _official_real:
+                continue
+            # 跳过重复目录
+            if any(os.path.realpath(r) == d_real for r in resolved):
+                continue
+            resolved.append(d)
+
+        # 始终把 official_plugins 放在最前面
+        if _official_real and not any(
+            os.path.realpath(r) == _official_real for r in resolved
+        ):
+            resolved.insert(0, _official_dir)
+
+        return resolved
+
     def add_plugin_dir(self, path: str) -> str:
         cfg = self.config_manager.load()
         dirs = cfg.get("plugin_dirs", [])
@@ -650,7 +802,7 @@ class AgentAPI:
             dirs.append(path)
             cfg["plugin_dirs"] = dirs
             self.config_manager.save(cfg)
-            self.plugin_manager.set_plugin_dirs(dirs)
+            self.plugin_manager.set_plugin_dirs(self._resolve_plugin_dirs(dirs))
         return "ok"
 
     def remove_plugin_dir(self, path: str) -> str:
@@ -660,13 +812,13 @@ class AgentAPI:
             dirs.remove(path)
             cfg["plugin_dirs"] = dirs
             self.config_manager.save(cfg)
-            self.plugin_manager.set_plugin_dirs(dirs)
+            self.plugin_manager.set_plugin_dirs(self._resolve_plugin_dirs(dirs))
         return "ok"
 
     def reload_plugins(self) -> str:
         cfg = self.config_manager.load()
         dirs = cfg.get("plugin_dirs", [])
-        self.plugin_manager.set_plugin_dirs(dirs)
+        self.plugin_manager.set_plugin_dirs(self._resolve_plugin_dirs(dirs))
         return "ok"
 
     def pick_plugin_dir(self) -> str:
@@ -705,7 +857,7 @@ class AgentAPI:
         cfg["plugin_security_resource_limit"] = resource_limit
         self.config_manager.save(cfg)
         self.plugin_manager.update_security_config(cfg)
-        self.plugin_manager.set_plugin_dirs(cfg.get("plugin_dirs", []))
+        self.plugin_manager.set_plugin_dirs(self._resolve_plugin_dirs(cfg.get("plugin_dirs", [])))
         return "ok"
 
     # ═══════════════════════════════════════════════════════════════

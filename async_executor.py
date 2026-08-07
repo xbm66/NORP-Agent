@@ -47,10 +47,12 @@ class AsyncToolExecutor:
         permission_cascade: Optional[PermissionCascade] = None,
         lifecycle_manager: Optional[LifecycleManager] = None,
         resource_isolator: Optional[ResourceIsolator] = None,
+        allow_full_read_large_files: bool = False,
     ):
         self.project_root = os.path.abspath(project_root)
         self.app_dir = app_dir
         self.task_id = task_id or f"task_{id(self)}"
+        self.allow_full_read_large_files = allow_full_read_large_files
 
         # 注入依赖（默认使用全局单例）
         self.sandbox_pool = sandbox_pool or get_sandbox_pool()
@@ -197,6 +199,20 @@ class AsyncToolExecutor:
         # 文件 I/O 队列：获取读权限
         await self.file_io_queue.acquire(self.task_id, path, FileOp.READ)
         try:
+            # ── 全量读取大文件开关 ──
+            # 默认关闭：不允许不指定行范围的情况下全量读取 >100KB 的文件
+            # 打开后（allow_full_read_large_files=True）模型可以读取任意大小文件
+            if start_line is None and end_line is None:
+                file_size = os.path.getsize(path)
+                MAX_FULL_READ_SIZE = 100 * 1024  # 100KB
+                if file_size > MAX_FULL_READ_SIZE and not self.allow_full_read_large_files:
+                    size_kb = file_size / 1024
+                    return (
+                        f"文件过大，仅能部分读取（{size_kb:.0f} KB > 100 KB）。\n"
+                        f"请使用 start_line / end_line 参数按行范围读取需要的代码片段。\n"
+                        f"也可先用 list_dir 查看文件大小，或用 search_large_file / "
+                        f"search_files / surgical_scan 定位后再读。"
+                    )
             with open(path, "r", encoding="utf-8") as f:
                 if start_line is None and end_line is None:
                     return f.read()

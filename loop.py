@@ -25,9 +25,15 @@ from agent_shared import (
     get_thinking_extra_body,
     get_reasoning_effort,
     convert_openai_messages_to_anthropic,
+    is_loopback_url,
+    plugin_has_tool,
 )
 
 CHARS_PER_TOKEN = 3
+
+# 本地部署模式（Ollama 等）的上下文窗口上限与保底值
+LOCAL_NUM_CTX_MAX = 65536
+LOCAL_NUM_CTX_MIN = 8192
 
 
 def estimate_tokens(text: str) -> int:
@@ -56,6 +62,7 @@ class AgentLoop:
         task_timeout: int = 0,
         plugin_manager: Optional[PluginManager] = None,
         use_responses_api: bool = True,
+        custom_system_prompt: str = "",
     ):
         self.api_key = api_key
         self.use_responses_api = use_responses_api
@@ -70,6 +77,7 @@ class AgentLoop:
         self.think_level = think_level
         self.max_tokens = max_tokens
         self.task_timeout = task_timeout 
+        self.custom_system_prompt = custom_system_prompt
 
        
         self._task_start_time = 0.0
@@ -95,14 +103,19 @@ class AgentLoop:
             self.tool_log_path = ""
 
         
+        # ── 本地部署模式检测（BaseURL 指向回环地址 → Ollama 等本地服务）──
+        self._is_local_mode = is_loopback_url(base_url)
+
         self._is_deepseek_official = (
             base_url.rstrip('/') == "https://api.deepseek.com"
+            and not self._is_local_mode
         )
 
         # ── Responses API 原生支持（DeepSeek V4 Flash 正式版）──
         # 设置开关 use_responses_api 默认开启：
         # - 仅官方端点 + flash 模型时启用（Responses API 目前仅支持 V4 Flash）
         # - 非 flash 模型 / 自定义端点自动回退 Chat Completions
+        # - 本地部署模式强制关闭（本地服务只兼容 Chat Completions）
         self._use_responses_api = (
             use_responses_api
             and self._is_deepseek_official
@@ -110,11 +123,20 @@ class AgentLoop:
         )
 
         # Anthropic 兼容搜索模式仅在未启用 Responses API 时使用
+        # （本地部署模式强制关闭）
         self._use_anthropic_search = (
             enable_web_search
+            and not self._is_local_mode
             and base_url in ("https://api.deepseek.com", "https://api.deepseek.com/")
             and not self._use_responses_api
         )
+
+        # Ollama 特有探测 + 本地模式优化（占位 key / 模型自动匹配）
+        self._is_ollama = self._is_local_mode and self._detect_ollama(base_url, api_key)
+        if self._is_local_mode:
+            if not api_key:
+                api_key = "ollama"  # 本地服务无需鉴权，OpenAI SDK 要求非空
+            self._resolve_local_model()
 
         self.client = OpenAI(api_key=api_key, base_url=base_url)
 
@@ -158,6 +180,51 @@ class AgentLoop:
         })
         self.plugin_manager.fire_agent_init()
 
+    # ═══════════════════════════════════════════════════════════════
+    #  本地部署模式：Ollama 探测 / 模型自动匹配
+    # ═══════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _detect_ollama(base_url: str, api_key: str) -> bool:
+        """探测目标是否为 Ollama 服务（Ollama 独有的 /api/tags 端点）。"""
+        if not base_url:
+            return False
+        try:
+            import requests
+            url = base_url.rstrip("/") + "/api/tags"
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+            resp = requests.get(url, headers=headers, timeout=2)
+            if resp.status_code == 200:
+                data = resp.json()
+                return isinstance(data, dict) and "models" in data
+        except Exception:
+            pass
+        return False
+
+    def _resolve_local_model(self):
+        """本地模式下自动匹配可用模型（配置模型不存在时回退第一个）。"""
+        try:
+            models = self.client.models.list()
+            local_ids = [m.id for m in getattr(models, "data", [])]
+            if not local_ids:
+                return
+            if self.model in local_ids:
+                return
+            fallback = local_ids[0]
+            print(f"[LocalMode] model '{self.model}' not found locally, "
+                  f"fallback to '{fallback}' (available: {local_ids[:5]})")
+            self.model = fallback
+        except Exception:
+            pass  # 静默降级：保持原模型配置
+
+    def get_local_mode_info(self) -> dict:
+        """返回本地部署模式信息（供 API 层 / 前端展示）。"""
+        return {
+            "local_mode": self._is_local_mode,
+            "is_ollama": self._is_ollama,
+            "model": self.model,
+            "base_url": self.base_url,
+        }
 
     def _get_elapsed(self) -> float:
         """获取已用时间（扣除暂停时间）。"""
@@ -196,9 +263,21 @@ class AgentLoop:
     def _build_full_messages(self, user_message: str, history: Optional[List[Dict]] = None,
                               memory_content: str = "") -> list:
         """构建完整的消息列表（委托给共享模块）。"""
+        plugin_tool_names = None
+        if self.plugin_manager:
+            pt = self.plugin_manager.get_tools()
+            if pt:
+                plugin_tool_names = [t["function"]["name"] for t in pt]
         return build_full_messages(
             user_message, self.project_root, self.enable_web_search,
-            history=history, memory_content=memory_content
+            history=history, memory_content=memory_content,
+            has_context_retriever=plugin_has_tool(
+                self.plugin_manager, "search_context"),
+            has_file_searcher=plugin_has_tool(
+                self.plugin_manager, "search_large_file"),
+            has_file_surgeon=plugin_has_tool(
+                self.plugin_manager, "surgical_replace"),
+            plugin_tool_names=plugin_tool_names
         )
 
 
@@ -214,8 +293,31 @@ class AgentLoop:
 
 
     def _build_system_prompt(self) -> str:
-        """构建系统提示词（委托给共享模块）。"""
-        return build_system_prompt(self.project_root, self.enable_web_search)
+        """构建系统提示词（委托给共享模块）。
+
+        动态检测插件工具并注入对应的使用指南：
+        - context_retriever → search_context / index_context
+        - file_searcher → search_large_file / search_files / index_workspace
+        - file_surgeon → surgical_scan / surgical_replace
+
+        模型是提示词驱动的，仅提供工具 schema 不足以让它主动使用插件工具，
+        必须在提示词中说明使用时机和优先规则。
+        """
+        plugin_tool_names = None
+        if self.plugin_manager:
+            pt = self.plugin_manager.get_tools()
+            if pt:
+                plugin_tool_names = [t["function"]["name"] for t in pt]
+        return build_system_prompt(
+            self.project_root, self.enable_web_search,
+            has_context_retriever=plugin_has_tool(
+                self.plugin_manager, "search_context"),
+            has_file_searcher=plugin_has_tool(
+                self.plugin_manager, "search_large_file"),
+            has_file_surgeon=plugin_has_tool(
+                self.plugin_manager, "surgical_replace"),
+            plugin_tool_names=plugin_tool_names,
+            custom_prompt=self.custom_system_prompt)
 
 
     def stop(self):
@@ -462,17 +564,33 @@ class AgentLoop:
                 "messages": messages,
                 "tools": active_tools,
                 "stream": True,
-                "extra_body": thinking_extra_body,
                 "max_tokens": self.max_tokens
             }
 
-            if self._is_deepseek_official:
+            if self._is_deepseek_official and not self._is_local_mode:
                 api_params["stream_options"] = {"include_usage": True}
 
-            if reasoning_effort is not None:
+            if reasoning_effort is not None and not self._is_local_mode:
                 api_params["reasoning_effort"] = reasoning_effort
 
-            if self.think_level == "关":
+            if not self._is_local_mode:
+                api_params["extra_body"] = thinking_extra_body
+            else:
+                # ── 本地部署模式优化（Ollama 等）──
+                api_params["temperature"] = self.temperature
+                if self._is_ollama:
+                    # Ollama 专用：保持模型常驻 + 扩展上下文窗口
+                    num_ctx = min(
+                        max(self.max_tokens + 4096, LOCAL_NUM_CTX_MIN),
+                        LOCAL_NUM_CTX_MAX,
+                    )
+                    api_params["extra_body"] = {
+                        "keep_alive": "30m",
+                        "options": {"num_ctx": num_ctx},
+                    }
+                    api_params["max_tokens"] = min(self.max_tokens, num_ctx - 1024)
+
+            if self.think_level == "关" and not self._is_local_mode:
                 api_params["temperature"] = self.temperature
 
             stream = self.client.chat.completions.create(**api_params)

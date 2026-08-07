@@ -28,9 +28,15 @@ from agent_shared import (
     get_thinking_extra_body,
     get_reasoning_effort,
     convert_openai_messages_to_anthropic,
+    is_loopback_url,
+    plugin_has_tool,
 )
 
 CHARS_PER_TOKEN = 3
+
+# 本地部署模式（Ollama 等）的上下文窗口上限与保底值
+LOCAL_NUM_CTX_MAX = 65536
+LOCAL_NUM_CTX_MIN = 8192
 
 
 def estimate_tokens(text: str) -> int:
@@ -67,6 +73,8 @@ class AsyncAgentLoop:
         task_timeout: int = 0,
         plugin_manager=None,
         use_responses_api: bool = True,
+        allow_full_read_large_files: bool = False,
+        custom_system_prompt: str = "",
     ):
         self.api_key = api_key
         self.use_responses_api = use_responses_api
@@ -81,6 +89,7 @@ class AsyncAgentLoop:
         self.think_level = think_level
         self.max_tokens = max_tokens
         self.task_timeout = task_timeout
+        self.custom_system_prompt = custom_system_prompt
 
         # 异步事件
         self._stop_event = asyncio.Event()
@@ -119,24 +128,44 @@ class AsyncAgentLoop:
         # 事件循环引用（线程安全停止用）
         self._agent_loop: Optional[asyncio.AbstractEventLoop] = None
 
+        # ── 本地部署模式检测 ──
+        # API Base URL 指向本机回环地址（localhost / 127.x / ::1）时，
+        # 判定为本地部署模式（Ollama / LM Studio / vLLM 等本地模型服务），
+        # 自动启用针对本地推理的系列优化（见 _call_openai_stream）。
+        self._is_local_mode = is_loopback_url(base_url)
+
         # DeepSeek 官方端点检测
         self._is_deepseek_official = (
             base_url.rstrip('/') == "https://api.deepseek.com"
+            and not self._is_local_mode
         )
 
-        # Responses API
+        # Responses API：仅 DeepSeek 官方 + flash 模型；本地模式强制关闭
+        # （本地服务几乎都只兼容 OpenAI Chat Completions 协议）
         self._use_responses_api = (
             use_responses_api
             and self._is_deepseek_official
             and "flash" in model
         )
 
-        # Anthropic 兼容搜索
+        # Anthropic 兼容搜索：仅 DeepSeek 官方端点；本地模式强制关闭
         self._use_anthropic_search = (
             enable_web_search
+            and not self._is_local_mode
             and base_url in ("https://api.deepseek.com", "https://api.deepseek.com/")
             and not self._use_responses_api
         )
+
+        # Ollama 特有探测：本地模式下通过 /api/tags 端点识别（Ollama 独有）
+        self._is_ollama = self._is_local_mode and self._detect_ollama(base_url, api_key)
+
+        # 本地部署模式优化：
+        # 1. API Key 占位 — Ollama 等本地服务无需认证，但 OpenAI SDK 要求非空
+        # 2. 模型自动匹配 — 配置的云端模型名在本地不存在时，自动选择第一个可用模型
+        if self._is_local_mode:
+            if not api_key:
+                api_key = "ollama"  # 本地服务占位 key，不参与真实鉴权
+            self._resolve_local_model()
 
         # OpenAI Client（在线程池中调用）
         self.client = OpenAI(api_key=api_key, base_url=base_url)
@@ -154,6 +183,7 @@ class AsyncAgentLoop:
             project_root=project_root,
             app_dir=app_dir,
             task_id=f"task_{id(self)}",
+            allow_full_read_large_files=allow_full_read_large_files,
         )
 
         # 事件队列
@@ -161,6 +191,90 @@ class AsyncAgentLoop:
 
         # 插件
         self.plugin_manager = plugin_manager
+
+    # ═══════════════════════════════════════════════════════════════
+    #  本地部署模式：Ollama 探测 / 模型自动匹配
+    # ═══════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _detect_ollama(base_url: str, api_key: str) -> bool:
+        """探测目标是否为 Ollama 服务。
+
+        Ollama 的 OpenAI 兼容层暴露独有的 /api/tags 端点（返回 {"models": [...]}），
+        而 LM Studio / vLLM / llama.cpp 等均无此端点，可用于可靠识别。
+        探测失败（服务未启动 / 超时）时静默返回 False，不影响主流程。
+        """
+        if not base_url:
+            return False
+        try:
+            import requests
+            url = base_url.rstrip("/") + "/api/tags"
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+            resp = requests.get(url, headers=headers, timeout=2)
+            if resp.status_code == 200:
+                data = resp.json()
+                return isinstance(data, dict) and "models" in data
+        except Exception:
+            pass
+        return False
+
+    def _resolve_local_model(self):
+        """本地模式下自动匹配可用模型。
+
+        若配置的模型名（如 deepseek-v4-pro）不在本地服务的模型列表中，
+        自动切换为第一个可用模型，避免 Chat Completions 报 model not found。
+
+        对于非 Ollama 本地服务（Qwen / llama.cpp / vLLM 等），如果 /v1/models
+        端点不可用，尝试智能回退以避免 400 错误。
+        """
+        try:
+            models = self.client.models.list()
+            local_ids = [m.id for m in getattr(models, "data", [])]
+            if local_ids:
+                if self.model in local_ids:
+                    return
+                # 配置的模型不存在 → 自动选择第一个可用模型
+                fallback = local_ids[0]
+                print(f"[LocalMode] model '{self.model}' not found locally, "
+                      f"fallback to '{fallback}' (available: {local_ids[:5]})")
+                self.model = fallback
+                return
+            # models.data 为空 — 非 Ollama 本地服务可能不支持 /v1/models
+            # 尝试智能回退：如果模型名明显是云端专属（deepseek / gpt / claude），
+            # 替换为常见本地模型名，避免 400 model not found
+            _cloud_prefixes = ("deepseek", "gpt-", "claude", "o1", "o3", "gemini")
+            if self._is_local_mode and not self._is_ollama:
+                if any(self.model.lower().startswith(p) for p in _cloud_prefixes):
+                    _fallbacks = ["gpt-3.5-turbo", "qwen", "local-model", "default"]
+                    for fb in _fallbacks:
+                        if fb not in (self.model,):
+                            print(f"[LocalMode] /v1/models unavailable, "
+                                  f"fallback model '{self.model}' → '{fb}' "
+                                  f"(set correct model name in Settings if needed)")
+                            self.model = fb
+                            return
+        except Exception:
+            # /v1/models 调用异常 — 同上，尝试智能回退
+            _cloud_prefixes = ("deepseek", "gpt-", "claude", "o1", "o3", "gemini")
+            if self._is_local_mode and not self._is_ollama:
+                if any(self.model.lower().startswith(p) for p in _cloud_prefixes):
+                    _fallbacks = ["gpt-3.5-turbo", "qwen", "local-model", "default"]
+                    for fb in _fallbacks:
+                        if fb not in (self.model,):
+                            print(f"[LocalMode] /v1/models error, "
+                                  f"fallback model '{self.model}' → '{fb}'")
+                            self.model = fb
+                            return
+            # 其他异常静默降级：保持原模型配置
+
+    def get_local_mode_info(self) -> dict:
+        """返回本地部署模式信息（供 API 层 / 前端展示）。"""
+        return {
+            "local_mode": self._is_local_mode,
+            "is_ollama": self._is_ollama,
+            "model": self.model,
+            "base_url": self.base_url,
+        }
 
     # ═══════════════════════════════════════════════════════════════
     #  停止 / 用户交互
@@ -461,6 +575,11 @@ class AsyncAgentLoop:
 
             self._step_count = step + 1
 
+            # ── Hook: before_step（与同步版对齐，供 context_retriever 注入索引状态）──
+            if self.plugin_manager:
+                messages = self.plugin_manager.fire_before_step(
+                    self._step_count, messages)
+
             # 在线程池中调用同步 API
             result = await self._call_openai_stream(
                 messages=messages,
@@ -516,20 +635,47 @@ class AsyncAgentLoop:
     async def _call_openai_stream(self, messages: list, tools: list,
                                   thinking_extra_body: dict,
                                   reasoning_effort: Optional[str]) -> Optional[dict]:
-        """在线程池中调用 OpenAI 流式 API。"""
+        """在线程池中调用 OpenAI 流式 API。
+
+        本地部署模式（_is_local_mode）下自动执行以下优化：
+        1. 移除 DeepSeek 专属参数（thinking extra_body / reasoning_effort），
+           本地服务（Ollama / LM Studio / vLLM）不识别这些字段；
+        2. temperature 始终生效（本地服务无 thinking 约束）；
+        3. Ollama 专用：keep_alive 保持模型常驻内存 + options.num_ctx
+           扩展上下文窗口，max_tokens 收敛到上下文范围内；
+        4. 不发送 stream_options.include_usage（部分本地服务不支持）。
+        """
         api_params = {
             "model": self.model,
             "messages": messages,
             "tools": tools,
             "stream": True,
-            "extra_body": thinking_extra_body,
             "max_tokens": self.max_tokens,
         }
-        if self._is_deepseek_official:
-            api_params["stream_options"] = {"include_usage": True}
-        if reasoning_effort is not None:
-            api_params["reasoning_effort"] = reasoning_effort
-        if self.think_level == "关":
+        if not self._is_local_mode:
+            # 云端模式：DeepSeek 官方端点才支持 usage 统计
+            if self._is_deepseek_official:
+                api_params["stream_options"] = {"include_usage": True}
+            if reasoning_effort is not None:
+                api_params["reasoning_effort"] = reasoning_effort
+            api_params["extra_body"] = thinking_extra_body
+        else:
+            # ── 本地部署模式优化 ──
+            # temperature 始终发送（本地模型无 thinking/temperature 互斥约束）
+            api_params["temperature"] = self.temperature
+            if self._is_ollama:
+                # Ollama 专用：保持模型常驻 + 扩展上下文窗口
+                num_ctx = min(
+                    max(self.max_tokens + 4096, LOCAL_NUM_CTX_MIN),
+                    LOCAL_NUM_CTX_MAX,
+                )
+                api_params["extra_body"] = {
+                    "keep_alive": "30m",          # 模型常驻内存，避免重复加载
+                    "options": {"num_ctx": num_ctx},  # 上下文窗口对齐 max_tokens
+                }
+                # Ollama 的 max_tokens → num_predict，不能超过 num_ctx
+                api_params["max_tokens"] = min(self.max_tokens, num_ctx - 1024)
+        if self.think_level == "关" and not self._is_local_mode:
             api_params["temperature"] = self.temperature
 
         # 在线程池中运行同步流式调用
@@ -570,24 +716,21 @@ class AsyncAgentLoop:
                             if tc.function and tc.function.arguments:
                                 tool_calls_accum[idx]["arguments"] += tc.function.arguments
 
+                    # ★ 修复：直接调用 EventQueue.put()（线程安全），
+                    # 不再使用 call_soon_threadsafe 间接调度。
+                    # call_soon_threadsafe 导致事件入队顺序与流式产生顺序
+                    # 不一致，工具调用后思考过程显示破碎。
                     if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
                         reasoning_parts.append(delta.reasoning_content)
-                        # 在线程安全的方式下发事件
-                        loop.call_soon_threadsafe(
-                            self.event_queue.put, f"T:{delta.reasoning_content}"
-                        )
+                        self.event_queue.put(f"T:{delta.reasoning_content}")
                     if hasattr(delta, 'content') and delta.content:
                         if not _output_started:
                             _output_started = True
-                            loop.call_soon_threadsafe(self.event_queue.put, "F:")
+                            self.event_queue.put("F:")
                         content_parts.append(delta.content)
-                        loop.call_soon_threadsafe(
-                            self.event_queue.put, f"R:{delta.content}"
-                        )
+                        self.event_queue.put(f"R:{delta.content}")
             except Exception as e:
-                loop.call_soon_threadsafe(
-                    self.event_queue.put, f"E:API call failed: {str(e)}"
-                )
+                self.event_queue.put(f"E:API call failed: {str(e)}")
 
             tool_calls_list = []
             for idx in sorted(tool_calls_accum.keys()):
@@ -615,16 +758,57 @@ class AsyncAgentLoop:
     #  工具调用处理（异步）
     # ═══════════════════════════════════════════════════════════════
 
+    async def _execute_tool_async(self, tool_name: str, tool_args: dict) -> str:
+        """Execute a tool, routing to plugin or built-in executor (async-safe).
+
+        Mirrors loop.py._execute_tool() for the async path.
+        Plugin tools MUST be routed through PluginManager.execute();
+        otherwise they return "Error: unknown tool".
+        """
+        # Check plugin tools first
+        if self.plugin_manager:
+            plugin_tools = self.plugin_manager.get_tools()
+            plugin_names = {t["function"]["name"] for t in plugin_tools}
+            if tool_name in plugin_names:
+                return self.plugin_manager.execute(tool_name, tool_args)
+        # Fall back to built-in executor
+        return await self.executor.execute(tool_name, tool_args)
+
     async def _process_tool_calls_async(self, messages: list,
                                         tool_calls_list: list,
                                         step: int) -> Optional[str]:
-        """异步处理工具调用。"""
+        """异步处理工具调用。
+
+        与同步版 _process_tool_calls_openai() 行为对齐：
+        1. before_tool_call / after_tool_call 插件钩子
+        2. 插件工具优先路由到 PluginManager（修复 unknown tool bug）
+        3. ask_user 交互、写/删文件确认
+        """
         for tc in tool_calls_list:
             tool_name = tc["function"]["name"]
             tool_args = json.loads(tc["function"]["arguments"])
 
+            # ── Hook: before_tool_call ──
+            if self.plugin_manager:
+                modified_args = self.plugin_manager.fire_before_tool_call(
+                    tool_name, tool_args)
+                if modified_args is None:
+                    # Blocked by plugin
+                    blocked_msg = "Tool call blocked by plugin."
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": blocked_msg
+                    })
+                    self.executor.log_tool_call(step + 1, tool_name, tool_args, blocked_msg)
+                    continue
+                tool_args = modified_args
+
             if tool_name == "ask_user":
                 question = tool_args.get("question", "")
+                # ── Hook: user_input_required ──
+                if self.plugin_manager:
+                    self.plugin_manager.fire_user_input_required(question)
                 self.event_queue.put(f"Q:{json.dumps(question, ensure_ascii=False)}")
                 reply = await self._wait_for_user_input()
                 if self._stop_event.is_set():
@@ -658,8 +842,13 @@ class AsyncAgentLoop:
                         self.executor.log_tool_call(step + 1, tool_name, tool_args, cancel_msg)
                         continue
 
-                # 异步执行工具
-                result = await self.executor.execute(tool_name, tool_args)
+                # ★ 异步执行工具（先路由插件，再回退内置执行器）
+                result = await self._execute_tool_async(tool_name, tool_args)
+
+                # ── Hook: after_tool_call ──
+                if self.plugin_manager:
+                    result = self.plugin_manager.fire_after_tool_call(
+                        tool_name, tool_args, result)
 
                 messages.append({
                     "role": "tool",
@@ -700,6 +889,11 @@ class AsyncAgentLoop:
                 return "timeout"
 
             self._step_count = step + 1
+
+            # ── Hook: before_step（与同步版对齐，供 context_retriever 注入索引状态）──
+            if self.plugin_manager:
+                messages = self.plugin_manager.fire_before_step(
+                    self._step_count, messages)
 
             input_items = self._build_responses_input(messages)
 
@@ -802,14 +996,14 @@ class AsyncAgentLoop:
                     if et == "response.reasoning_text.delta":
                         delta = getattr(event, "delta", "") or ""
                         reasoning_parts.append(delta)
-                        loop.call_soon_threadsafe(self.event_queue.put, f"T:{delta}")
+                        self.event_queue.put(f"T:{delta}")
                     elif et == "response.output_text.delta":
                         delta = getattr(event, "delta", "") or ""
                         if not _output_started:
                             _output_started = True
-                            loop.call_soon_threadsafe(self.event_queue.put, "F:")
+                            self.event_queue.put("F:")
                         content_parts.append(delta)
-                        loop.call_soon_threadsafe(self.event_queue.put, f"R:{delta}")
+                        self.event_queue.put(f"R:{delta}")
                     elif et == "response.function_call_arguments.delta":
                         item_id = getattr(event, "item_id", "") or ""
                         delta = getattr(event, "delta", "") or ""
@@ -837,9 +1031,7 @@ class AsyncAgentLoop:
                                 "output_tokens": getattr(u, "output_tokens", 0) or 0
                             }
             except Exception as e:
-                loop.call_soon_threadsafe(
-                    self.event_queue.put, f"E:Responses API call failed: {str(e)}"
-                )
+                self.event_queue.put(f"E:Responses API call failed: {str(e)}")
 
             tool_calls_list = []
             for item_id in sorted(tool_calls_accum.keys()):
@@ -903,6 +1095,12 @@ class AsyncAgentLoop:
 
             self._step_count = step + 1
 
+            # ── Hook: before_step（与同步版对齐；Anthropic 格式消息无 system 角色，
+            #   注入型钩子会自行跳过，返回值在此路径被忽略）──
+            if self.plugin_manager:
+                self.plugin_manager.fire_before_step(
+                    self._step_count, anthropic_messages)
+
             result = await self._call_anthropic_stream_async(
                 messages=anthropic_messages,
                 system_prompt=system_prompt,
@@ -961,8 +1159,26 @@ class AsyncAgentLoop:
                 }, ensure_ascii=False)
                 self.event_queue.put(f"C:{cmd_info}")
 
+                # ── Hook: before_tool_call ──
+                if self.plugin_manager:
+                    modified_input = self.plugin_manager.fire_before_tool_call(
+                        tool_name, tool_input)
+                    if modified_input is None:
+                        # Blocked by plugin
+                        blocked_msg = "Tool call blocked by plugin."
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": blocked_msg
+                        })
+                        continue
+                    tool_input = modified_input
+
                 if tool_name == "ask_user":
                     question = tool_input.get("question", "")
+                    # ── Hook: user_input_required ──
+                    if self.plugin_manager:
+                        self.plugin_manager.fire_user_input_required(question)
                     self.event_queue.put(f"Q:{json.dumps(question, ensure_ascii=False)}")
                     reply = await self._wait_for_user_input()
                     if self._stop_event.is_set():
@@ -987,7 +1203,14 @@ class AsyncAgentLoop:
                             })
                             continue
 
-                    result_text = await self.executor.execute(tool_name, tool_input)
+                    # ★ 异步执行工具（先路由插件，再回退内置执行器）
+                    result_text = await self._execute_tool_async(tool_name, tool_input)
+
+                    # ── Hook: after_tool_call ──
+                    if self.plugin_manager:
+                        result_text = self.plugin_manager.fire_after_tool_call(
+                            tool_name, tool_input, result_text)
+
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tool_id,
@@ -1048,17 +1271,13 @@ class AsyncAgentLoop:
                             delta = event.delta
                             if hasattr(delta, 'thinking') and delta.thinking:
                                 reasoning_parts.append(delta.thinking)
-                                loop.call_soon_threadsafe(
-                                    self.event_queue.put, f"T:{delta.thinking}"
-                                )
+                                self.event_queue.put(f"T:{delta.thinking}")
                             if hasattr(delta, 'text') and delta.text:
                                 if not _output_started:
                                     _output_started = True
-                                    loop.call_soon_threadsafe(self.event_queue.put, "F:")
+                                    self.event_queue.put("F:")
                                 content_parts.append(delta.text)
-                                loop.call_soon_threadsafe(
-                                    self.event_queue.put, f"R:{delta.text}"
-                                )
+                                self.event_queue.put(f"R:{delta.text}")
                         elif event.type == "content_block_stop":
                             if hasattr(event, 'content_block') and event.content_block:
                                 cb = event.content_block
@@ -1083,9 +1302,7 @@ class AsyncAgentLoop:
                                         "output_tokens": getattr(msg_usage, 'output_tokens', 0) or 0
                                     }
             except Exception as e:
-                loop.call_soon_threadsafe(
-                    self.event_queue.put, f"E:Anthropic API call failed: {str(e)}"
-                )
+                self.event_queue.put(f"E:Anthropic API call failed: {str(e)}")
 
             return {
                 "reasoning": "".join(reasoning_parts),
@@ -1108,14 +1325,48 @@ class AsyncAgentLoop:
     def _build_full_messages(self, user_message: str, history: Optional[List[Dict]] = None,
                               memory_content: str = "") -> list:
         """构建完整的消息列表（委托给共享模块）。"""
+        plugin_tool_names = None
+        if self.plugin_manager:
+            pt = self.plugin_manager.get_tools()
+            if pt:
+                plugin_tool_names = [t["function"]["name"] for t in pt]
         return build_full_messages(
             user_message, self.project_root, self.enable_web_search,
-            history=history, memory_content=memory_content
-        )
+            history=history, memory_content=memory_content,
+            has_context_retriever=plugin_has_tool(
+                self.plugin_manager, "search_context"),
+            has_file_searcher=plugin_has_tool(
+                self.plugin_manager, "search_large_file"),
+            has_file_surgeon=plugin_has_tool(
+                self.plugin_manager, "surgical_replace"),
+            plugin_tool_names=plugin_tool_names)
 
     def _build_system_prompt(self) -> str:
-        """构建系统提示词（委托给共享模块）。"""
-        return build_system_prompt(self.project_root, self.enable_web_search)
+        """构建系统提示词（委托给共享模块）。
+
+        动态检测插件工具并注入对应的使用指南：
+        - context_retriever → search_context / index_context
+        - file_searcher → search_large_file / search_files / index_workspace
+        - file_surgeon → surgical_scan / surgical_replace
+
+        模型是提示词驱动的，仅提供工具 schema 不足以让它主动使用插件工具，
+        必须在提示词中说明使用时机和优先规则。
+        """
+        plugin_tool_names = None
+        if self.plugin_manager:
+            pt = self.plugin_manager.get_tools()
+            if pt:
+                plugin_tool_names = [t["function"]["name"] for t in pt]
+        return build_system_prompt(
+            self.project_root, self.enable_web_search,
+            has_context_retriever=plugin_has_tool(
+                self.plugin_manager, "search_context"),
+            has_file_searcher=plugin_has_tool(
+                self.plugin_manager, "search_large_file"),
+            has_file_surgeon=plugin_has_tool(
+                self.plugin_manager, "surgical_replace"),
+            plugin_tool_names=plugin_tool_names,
+            custom_prompt=self.custom_system_prompt)
 
     # ═══════════════════════════════════════════════════════════════
     #  工具构建

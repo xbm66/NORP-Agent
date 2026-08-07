@@ -6,7 +6,7 @@ BUILTIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取文件内容。可指定行范围只读取需要的片段以节省 token。Debug 时先用 search_in_files 定位问题，再用行范围精准读取。",
+            "description": "读取文件内容。可指定行范围只读取需要的代码片段，节省 token。⚠️ 全量读取 >100KB 文件默认被拒绝（返回「文件过大，仅能部分读取」），须用 start_line/end_line 按范围读取，或请求用户开启全量读取开关。大文件先用 search_large_file / surgical_scan 定位行号。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -98,7 +98,7 @@ BUILTIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "search_in_files",
-            "description": "在文件中搜索匹配的文本模式。",
+            "description": "在文件中搜索匹配的文本模式。仅适合小型项目全局搜索（结果上限 50 条，不支持正则）。大文件请用 search_large_file 或 search_files（需先 index_workspace）。",
             "parameters": {
                 "type": "object",
                 "properties": {

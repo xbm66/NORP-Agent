@@ -93,9 +93,11 @@ class DockerSandbox:
 
 class ToolExecutor:
 
-    def __init__(self, project_root: str, sandbox: Optional[DockerSandbox] = None, app_dir: str = ""):
+    def __init__(self, project_root: str, sandbox: Optional[DockerSandbox] = None, app_dir: str = "",
+                 allow_full_read_large_files: bool = False):
         self.project_root = os.path.abspath(project_root)
         self.sandbox = sandbox
+        self.allow_full_read_large_files = allow_full_read_large_files
         if app_dir:
             self.history_path = os.path.join(app_dir, ".agent_history.json")
             os.makedirs(app_dir, exist_ok=True)
@@ -139,6 +141,19 @@ class ToolExecutor:
         path = self._safe_path(args["path"])
         start_line = args.get("start_line")
         end_line = args.get("end_line")
+
+        # ── 全量读取大文件开关 ──
+        if start_line is None and end_line is None:
+            file_size = os.path.getsize(path)
+            MAX_FULL_READ_SIZE = 100 * 1024  # 100KB
+            if file_size > MAX_FULL_READ_SIZE and not self.allow_full_read_large_files:
+                size_kb = file_size / 1024
+                return (
+                    f"文件过大，仅能部分读取（{size_kb:.0f} KB > 100 KB）。\n"
+                    f"请使用 start_line / end_line 参数按行范围读取需要的代码片段。\n"
+                    f"也可先用 list_dir 查看文件大小，或用 search_large_file / "
+                    f"search_files / surgical_scan 定位后再读。"
+                )
         with open(path, "r", encoding="utf-8") as f:
             if start_line is None and end_line is None:
                 return f.read()
