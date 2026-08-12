@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<style>
+    <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
     font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
@@ -823,6 +823,299 @@ body {
 }
 .toast.show { opacity: 1; }
 
+/* ── NORP Safety Notification (top-right floating) ── */
+#norp-notification-container {
+    position: fixed;
+    top: 50px;
+    right: 16px;
+    z-index: 3000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 400px;
+    pointer-events: none;
+}
+.norp-notification {
+    background: linear-gradient(135deg, #c62828 0%, #b71c1c 100%);
+    color: #fff;
+    border: 2px solid #8b0000;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    box-shadow: 0 6px 24px rgba(198,40,40,0.45);
+    pointer-events: auto;
+    animation: norpSlideIn 0.35s ease-out;
+    opacity: 1;
+    transition: opacity 0.3s, transform 0.3s;
+    line-height: 1.5;
+    position: relative;
+}
+.norp-notification.fade-out {
+    opacity: 0;
+    transform: translateX(50px);
+}
+@keyframes norpSlideIn {
+    from { opacity: 0; transform: translateX(50px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+.norp-notification .norp-notif-close {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    opacity: 0.7;
+    color: #fff;
+    background: none;
+    border: none;
+    padding: 2px 4px;
+}
+.norp-notification .norp-notif-close:hover { opacity: 1; }
+.norp-notification .norp-notif-header {
+    font-weight: 700;
+    font-size: 14px;
+    margin-bottom: 4px;
+    padding-right: 20px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.norp-notification .norp-notif-body {
+    font-size: 12px;
+    opacity: 0.95;
+}
+.norp-notification .norp-notif-time {
+    font-size: 10px;
+    opacity: 0.7;
+    margin-top: 6px;
+}
+
+/* ── Crash Notification (red, top-right, 20s, with retry) ── */
+.crash-notification {
+    background: linear-gradient(135deg, #d32f2f 0%, #b71c1c 100%);
+    color: #fff;
+    border: 2px solid #ff1744;
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 13px;
+    box-shadow: 0 8px 32px rgba(211,47,47,0.55), 0 0 0 4px rgba(255,23,68,0.2);
+    pointer-events: auto;
+    animation: crashSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    opacity: 1;
+    transition: opacity 0.3s, transform 0.3s;
+    line-height: 1.5;
+    position: relative;
+    min-width: 340px;
+    max-width: 440px;
+}
+.crash-notification.fade-out {
+    opacity: 0;
+    transform: translateX(50px) scale(0.95);
+}
+@keyframes crashSlideIn {
+    from { opacity: 0; transform: translateX(60px) scale(0.9); }
+    to { opacity: 1; transform: translateX(0) scale(1); }
+}
+.crash-notification .crash-notif-close {
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    opacity: 0.6;
+    color: #fff;
+    background: none;
+    border: none;
+    padding: 4px 6px;
+    border-radius: 4px;
+    transition: all 0.15s;
+}
+.crash-notification .crash-notif-close:hover {
+    opacity: 1;
+    background: rgba(255,255,255,0.15);
+}
+.crash-notification .crash-notif-header {
+    font-weight: 800;
+    font-size: 15px;
+    margin-bottom: 6px;
+    padding-right: 24px;
+    letter-spacing: 0.3px;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+.crash-notification .crash-notif-body {
+    font-size: 12px;
+    opacity: 0.95;
+}
+.crash-notification .crash-notif-status {
+    font-size: 12px;
+    opacity: 0.85;
+    margin-bottom: 4px;
+}
+.crash-notification .crash-notif-reason {
+    font-size: 11px;
+    opacity: 0.75;
+    margin-top: 4px;
+    padding: 6px 10px;
+    background: rgba(0,0,0,0.2);
+    border-radius: 4px;
+    word-break: break-word;
+    max-height: 80px;
+    overflow-y: auto;
+    font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+    line-height: 1.4;
+}
+.crash-notification .crash-notif-actions {
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.crash-notification .crash-notif-retry-btn,
+.crash-notification .crash-notif-reload-btn {
+    padding: 5px 14px;
+    border: 1px solid rgba(255,255,255,0.4);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: inherit;
+    background: rgba(255,255,255,0.12);
+    color: #fff;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+.crash-notification .crash-notif-retry-btn:hover,
+.crash-notification .crash-notif-reload-btn:hover {
+    background: rgba(255,255,255,0.25);
+    border-color: rgba(255,255,255,0.7);
+    box-shadow: 0 0 8px rgba(255,255,255,0.2);
+}
+.crash-notification .crash-notif-retry-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.crash-notification .crash-notif-reload-btn {
+    background: rgba(255,255,255,0.2);
+    border-color: rgba(255,255,255,0.6);
+    font-size: 13px;
+    padding: 7px 18px;
+}
+.crash-notification .crash-notif-auto-hint {
+    font-size: 10px;
+    opacity: 0.7;
+    font-style: italic;
+}
+.crash-notification .crash-notif-time {
+    font-size: 10px;
+    opacity: 0.6;
+    margin-top: 8px;
+}
+
+/* Crash message in message center */
+.msg-item.msg-crash {
+    border-left-color: #d32f2f;
+    background: #fff0f0;
+}
+.msg-item.msg-crash:hover { background: #ffe8e8; }
+
+/* ── Message Center ── */
+#msg-center-btn {
+    position: relative;
+}
+#msg-center-badge {
+    position: absolute;
+    top: -5px;
+    right: -7px;
+    background: #e53935;
+    color: #fff;
+    border-radius: 10px;
+    font-size: 10px;
+    min-width: 16px;
+    height: 16px;
+    line-height: 16px;
+    text-align: center;
+    padding: 0 4px;
+    display: none;
+    font-weight: 700;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+#message-center-modal .modal-content {
+    max-width: 540px;
+    max-height: 75vh;
+}
+#message-center-modal .modal-body {
+    max-height: 55vh;
+    overflow-y: auto;
+    padding: 0 16px 12px;
+}
+.msg-item {
+    border-left: 4px solid #ccc;
+    padding: 10px 12px;
+    margin: 6px 0;
+    border-radius: 0 6px 6px 0;
+    font-size: 12px;
+    background: #fafafa;
+    position: relative;
+    transition: background 0.15s;
+}
+.msg-item:hover { background: #f0f0f0; }
+.msg-item.msg-blocked {
+    border-left-color: #e53935;
+    background: #fff5f5;
+}
+.msg-item.msg-blocked:hover { background: #ffeded; }
+.msg-item.msg-ask {
+    border-left-color: #1565c0;
+    background: #f3f7fd;
+}
+.msg-item.msg-ask:hover { background: #e8f0fa; }
+.msg-item.msg-plugin {
+    border-left-color: #f9a825;
+    background: #fffde7;
+}
+.msg-item.msg-plugin:hover { background: #fff9d0; }
+.msg-item .msg-close {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.4;
+    color: #666;
+    background: none;
+    border: none;
+    padding: 2px 6px;
+    line-height: 1;
+}
+.msg-item .msg-close:hover { opacity: 1; color: #c62828; }
+.msg-item .msg-time {
+    color: #999;
+    font-size: 10px;
+}
+.msg-item .msg-title {
+    font-weight: 600;
+    margin-bottom: 2px;
+    padding-right: 24px;
+}
+.msg-item .msg-detail {
+    color: #555;
+    margin-top: 2px;
+}
+.msg-item .msg-tab {
+    font-size: 10px;
+    color: #888;
+    margin-top: 4px;
+    font-style: italic;
+}
+.msg-empty {
+    text-align: center;
+    color: #999;
+    padding: 40px 20px;
+    font-size: 13px;
+}
+
 @media (max-width: 700px) {
     .panels { flex-direction: column; }
     .chat-panel { border-right: none; border-bottom: 1px solid #ddd; }
@@ -1323,9 +1616,184 @@ body {
     border: none;
     background: #fff;
 }
+
+/* ── Loading Overlay ── */
+#loading-overlay {
+    position: fixed;
+    inset: 0;
+    background: #f5f5f5;
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    transition: opacity 0.3s ease;
+    pointer-events: all;
+}
+#loading-overlay.fade-out {
+    opacity: 0;
+    pointer-events: none;
+}
+#loading-overlay.error {
+    background: #fff5f5;
+}
+#loading-overlay.done {
+    background: #f0fff0;
+}
+#loading-overlay .loading-spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid #ddd;
+    border-top-color: #007aff;
+    border-radius: 50%;
+    animation: loadSpin 0.7s linear infinite;
+    margin: 0 auto 16px auto;
+}
+#loading-overlay.error .loading-spinner,
+#loading-overlay.done .loading-spinner {
+    display: none;
+}
+@keyframes loadSpin {
+    to { transform: rotate(360deg); }
+}
+#loading-overlay .loading-error-icon {
+    display: none;
+    margin: 0 auto 16px auto;
+}
+#loading-overlay.error .loading-error-icon {
+    display: block;
+}
+#loading-overlay .loading-done-icon {
+    display: none;
+    margin: 0 auto 16px auto;
+}
+#loading-overlay.done .loading-done-icon {
+    display: block;
+}
+#loading-overlay > div {
+    text-align: center;
+    max-width: 520px;
+    padding: 20px;
+}
+#loading-overlay p {
+    font-size: 15px;
+    color: #888;
+    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+#loading-overlay.error p {
+    color: #d32f2f;
+    font-size: 16px;
+}
+#loading-overlay.done p {
+    color: #2e7d32;
+    font-size: 16px;
+}
+#loading-overlay .loading-fatal-badge {
+    display: none;
+}
+#loading-overlay.error .loading-fatal-badge {
+    display: inline;
+    background: #d32f2f;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 12px;
+    margin-left: 6px;
+}
+#loading-overlay .loading-error-details {
+    display: none;
+    margin-top: 16px;
+    font-size: 12px;
+    color: #c62828;
+    text-align: left;
+    background: #ffebee;
+    border: 1px solid #ffcdd2;
+    border-radius: 8px;
+    padding: 12px 16px;
+    max-height: 320px;
+    max-width: 520px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.7;
+}
+#loading-overlay.error .loading-error-details {
+    display: block;
+}
+#loading-overlay .loading-exit-btn {
+    display: none;
+    margin-top: 20px;
+    padding: 10px 32px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+    color: #fff;
+    background: #d32f2f;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+#loading-overlay .loading-exit-btn:hover {
+    background: #b71c1c;
+}
+#loading-overlay .loading-exit-btn:active {
+    background: #9a1b1b;
+}
+#loading-overlay.error .loading-exit-btn {
+    display: inline-block;
+}
+#loading-overlay .loading-progress {
+    margin-top: 12px;
+    font-size: 12px;
+    color: #666;
+    text-align: left;
+    max-width: 400px;
+    margin-left: auto;
+    margin-right: auto;
+    line-height: 2;
+    min-height: 20px;
+}
+#loading-overlay .loading-progress .loading-progress-item {
+    padding: 2px 0;
+    animation: fadeInProgress 0.3s ease;
+}
+#loading-overlay .loading-progress .loading-progress-item.done {
+    color: #2e7d32;
+}
+@keyframes fadeInProgress {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+#loading-overlay.error .loading-progress {
+    display: none;
+}
 </style>
 </head>
 <body>
+
+<!-- ── Loading Overlay ── -->
+<div id="loading-overlay">
+    <div>
+        <div class="loading-spinner"></div>
+        <!-- Error icon (red circle + exclamation) -->
+        <svg class="loading-error-icon" width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <circle cx="24" cy="24" r="22" stroke="#d32f2f" stroke-width="3"/>
+            <path d="M24 14v14" stroke="#d32f2f" stroke-width="3" stroke-linecap="round"/>
+            <circle cx="24" cy="32" r="1.5" fill="#d32f2f"/>
+        </svg>
+        <!-- Done icon (green circle + checkmark) -->
+        <svg class="loading-done-icon" width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <circle cx="24" cy="24" r="22" stroke="#2e7d32" stroke-width="3"/>
+            <path d="M14 24l7 7 13-14" stroke="#2e7d32" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p><span id="loadingStatusText" data-i18n="loading">加载中...</span><span class="loading-fatal-badge" id="loadingFatalBadge"></span></p>
+        <div class="loading-progress" id="loadingProgress"></div>
+        <div class="loading-error-details" id="loadingErrorDetails"></div>
+        <button class="loading-exit-btn" id="loadingExitBtn" data-i18n="loading_exit" onclick="if(window.pywebview&&window.pywebview.api)window.pywebview.api.quit_app();else window.close();">退出程序</button>
+    </div>
+</div>
 
 <div id="wizard-overlay">
     <canvas id="wiz-particles"></canvas>
@@ -1501,6 +1969,7 @@ body {
         <span class="header-token-display" id="header-tokens"></span>
     </div>
     <div class="btn-group">
+        <button id="msg-center-btn" data-i18n="messages">📨 消息<span id="msg-center-badge"></span></button>
         <button id="about-btn" data-i18n="about">About</button>
         <button id="balance-btn" data-i18n="balance">Balance</button>
         <button id="key-btn" data-i18n="key">Key</button>
@@ -1508,6 +1977,9 @@ body {
         <button id="stop-btn" class="btn-stop" data-i18n="stop">Stop</button>
     </div>
 </div>
+
+<!-- NORP 安全系统关闭警告条（顶部常驻） -->
+<div id="norp-safety-warning-bar" style="display:none;background:#b71c1c;color:#fff;text-align:center;padding:8px 16px;font-size:13px;font-weight:700;letter-spacing:0.5px;box-shadow:0 2px 8px rgba(183,28,28,0.3);z-index:100;position:relative;" data-i18n="norp_safety_warning_bar">⛔ 安全系统已关闭 — 智能体行为不再受保护</div>
 
 <div id="tab-bar">
     <div id="tab-list"></div>
@@ -1552,6 +2024,8 @@ body {
 
 <div id="toast-container"></div>
 
+<div id="norp-notification-container"></div>
+
 <div id="ask-user-modal" class="modal">
     <div class="modal-content">
         <h2>🤖 Agent Question</h2>
@@ -1594,14 +2068,21 @@ body {
             <option value="ja">日本語 (Japanese)</option>
         </select>
 
+        <!-- 关闭按钮默认行为 -->
+        <label data-i18n="close_behavior_label">🪟 关闭按钮默认行为</label>
+        <select id="cfg-close-behavior" style="margin-bottom:12px;">
+            <option value="minimize_to_tray" data-i18n="close_behavior_tray">最小化到任务栏托盘</option>
+            <option value="exit" data-i18n="close_behavior_exit">直接退出程序</option>
+        </select>
+
         <label data-i18n="model_label">Model</label>
         <select id="cfg-model"></select>
 
         <div class="checkbox-row">
-            <input type="checkbox" id="cfg-use-responses" checked>
+            <input type="checkbox" id="cfg-use-responses">
             <label for="cfg-use-responses">启用 Responses API（原生）</label>
         </div>
-        <div class="checkbox-desc">DeepSeek V4 Flash 已原生支持 Responses API。开启后，官方端点 + V4 Flash 自动走原生协议（语义化流式事件、服务端 web_search、reasoning.effort 推理控制）；关闭则使用 Chat Completions 兼容模式。非 flash 模型或自定义端点会自动回退。</div>
+        <div class="checkbox-desc">仅 OpenAI 端点支持</div>
 
         <label>API Base URL</label>
         <div class="flex-row">
@@ -1728,30 +2209,74 @@ body {
         </div>
         <!-- end plugin-security-section -->
 
+        <!-- NORP 安全系统 -->
+        <h3 style="margin-top:12px;" data-i18n="norp_safety_section">🛡️ NORP Safety System</h3>
+        <div id="norp-safety-section" style="margin-bottom:8px;">
+            <div class="checkbox-row">
+                <input type="checkbox" id="cfg-norp-safe-enabled">
+                <label for="cfg-norp-safe-enabled" data-i18n="norp_safety_enable">Enable Safety System</label>
+            </div>
+            <div class="checkbox-desc" data-i18n="norp_safety_enable_desc">Blocks dangerous commands (e.g. rm -rf /, format C:), UAC elevation, and path traversal.</div>
+            <div id="norp-safety-status" style="margin-top:6px;font-size:12px;padding:8px 12px;border-radius:6px;background:#e8f5e9;color:#2e7d32;" data-i18n="norp_safety_enabled_status">✅ Safety system enabled — dangerous operations will be blocked</div>
+        </div>
+        <!-- end NORP 安全系统 -->
+
+        <!-- 越狱/注入防护 -->
+        <h3 style="margin-top:12px;" data-i18n="jailbreak_guard_section">🔒 越狱/注入防护</h3>
+        <div id="jailbreak-guard-section" style="margin-bottom:8px;">
+            <div class="checkbox-row">
+                <input type="checkbox" id="cfg-jailbreak-guard-enabled">
+                <label for="cfg-jailbreak-guard-enabled" data-i18n="jailbreak_guard_enable">启用越狱/注入检测</label>
+            </div>
+            <div class="checkbox-desc" data-i18n="jailbreak_guard_enable_desc">检测并拦截试图绕过安全约束的提示词注入攻击（DAN、角色覆写、系统提示词泄露等）。关闭后所有消息将直接放行。</div>
+            <div style="margin-top:8px;">
+                <label style="font-size:12px;" data-i18n="jailbreak_guard_action_label">检测到攻击时的操作：</label>
+                <select id="cfg-jailbreak-guard-action" style="width:100%;margin-top:4px;">
+                    <option value="block" data-i18n="jailbreak_guard_action_block">拦截消息（推荐）</option>
+                    <option value="warn" data-i18n="jailbreak_guard_action_warn">仅记录日志警告</option>
+                </select>
+            </div>
+            <div id="jailbreak-guard-status" style="margin-top:6px;font-size:12px;padding:8px 12px;border-radius:6px;background:#e8f5e9;color:#2e7d32;" data-i18n="jailbreak_guard_enabled_status">✅ 越狱防护已启用 — 恶意注入将被拦截</div>
+        </div>
+        <!-- end 越狱/注入防护 -->
+
+        <!-- 运行时完整性检测 -->
+        <h3 style="margin-top:12px;" data-i18n="runtime_health_title">🩺 运行时健康检查</h3>
+        <div id="runtime-health-section" style="margin-bottom:8px;">
+            <div id="runtime-health-status" style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:6px;font-size:13px;background:#f0f0f0;">
+                <span style="font-size:20px;">⏳</span>
+                <span id="runtime-health-text" data-i18n="runtime_health_loading">正在加载...</span>
+                <button class="btn-small" id="runtime-health-refresh" style="margin-left:auto;" data-i18n="runtime_health_refresh">🔄 刷新</button>
+                <button class="btn-small" id="runtime-health-toggle" style="margin-left:4px;font-size:10px;padding:2px 6px;" title="展开/收起详情">▶</button>
+            </div>
+            <div id="runtime-health-detail" style="display:none;margin-top:6px;font-size:11px;max-height:250px;overflow-y:auto;background:#f8f8f8;border-radius:4px;padding:8px;font-family:monospace;white-space:pre-wrap;line-height:1.6;"></div>
+        </div>
+        <!-- end 运行时完整性检测 -->
+
         <!-- 自定义系统提示词 -->
-        <h3 style="margin-top:12px;">📝 自定义系统提示词</h3>
+        <h3 style="margin-top:12px;" data-i18n="custom_prompt_title">📝 自定义系统提示词</h3>
         <div class="checkbox-row">
             <input type="checkbox" id="cfg-custom-prompt-enabled">
-            <label for="cfg-custom-prompt-enabled">启用自定义系统提示词</label>
+            <label for="cfg-custom-prompt-enabled" data-i18n="custom_prompt_enable">启用自定义系统提示词</label>
         </div>
-        <div class="checkbox-desc">启用后将使用下方自定义提示词替换默认系统提示词。默认提示词包含工具调用说明和插件系统指南。</div>
+        <div class="checkbox-desc" data-i18n="custom_prompt_desc">启用后将使用下方自定义提示词替换默认系统提示词。默认提示词包含工具调用说明和插件系统指南。</div>
         <div id="custom-prompt-section" style="display:none;">
-            <label style="margin-top:8px;">提示词来源</label>
+            <label style="margin-top:8px;" data-i18n="custom_prompt_source_label">提示词来源</label>
             <select id="cfg-custom-prompt-source" style="width:100%;">
-                <option value="text">📝 手动输入</option>
-                <option value="file">📁 从文件导入（.md / .txt）</option>
+                <option value="text" data-i18n="custom_prompt_source_text">📝 手动输入</option>
+                <option value="file" data-i18n="custom_prompt_source_file">📁 从文件导入（.md / .txt）</option>
             </select>
             <div id="custom-prompt-text-section" style="margin-top:6px;">
-                <label>提示词内容</label>
-                <textarea id="cfg-custom-prompt" style="width:100%;height:150px;max-height:300px;font-size:12px;font-family:monospace;padding:8px;border:1px solid #ccc;border-radius:4px;overflow-y:auto;resize:none;" placeholder="在此输入自定义系统提示词..."></textarea>
+                <label data-i18n="custom_prompt_content_label">提示词内容</label>
+                <textarea id="cfg-custom-prompt" style="width:100%;height:150px;max-height:300px;font-size:12px;font-family:monospace;padding:8px;border:1px solid #ccc;border-radius:4px;overflow-y:auto;resize:none;" data-i18n-placeholder="custom_prompt_placeholder" placeholder="在此输入自定义系统提示词..."></textarea>
             </div>
             <div id="custom-prompt-file-section" style="display:none;margin-top:6px;">
-                <label>导入文件</label>
+                <label data-i18n="custom_prompt_import_file_label">导入文件</label>
                 <div class="flex-row">
-                    <input type="text" id="cfg-custom-prompt-file" placeholder="未选择文件" style="flex:1;" readonly>
-                    <button class="btn-small" id="cfg-custom-prompt-browse">📂 浏览</button>
+                    <input type="text" id="cfg-custom-prompt-file" data-i18n-placeholder="custom_prompt_no_file" placeholder="未选择文件" style="flex:1;" readonly>
+                    <button class="btn-small" id="cfg-custom-prompt-browse" data-i18n="custom_prompt_browse">📂 浏览</button>
                 </div>
-                <span style="font-size:10px;color:#888;">支持 .md 和 .txt 格式</span>
+                <span style="font-size:10px;color:#888;" data-i18n="custom_prompt_format_hint">支持 .md 和 .txt 格式</span>
             </div>
         </div>
         <!-- end 自定义系统提示词 -->
@@ -1787,10 +2312,83 @@ body {
         <h2>About</h2>
         <p><strong>Author:</strong> xingluosama</p>
         <p><strong>Studio:</strong> NORP Studio</p>
-        <p><strong>Version:</strong> pre-release 0.2.1</p>
+        <p><strong>Version:</strong> Release 1.0</p>
         <p style="margin-top:12px; color:#888; font-size:12px;">Built based on the OpenAI SDK specification.</p>
         <div class="btn-row">
             <button class="btn-primary" id="about-close-btn">OK</button>
+        </div>
+    </div>
+</div>
+
+<!-- Message Center Modal -->
+<div id="message-center-modal" class="modal">
+    <div class="modal-content" style="max-width:540px;max-height:75vh;">
+        <div class="modal-body" style="max-height:55vh;overflow-y:auto;padding:0 16px 12px;">
+            <h2 data-i18n="msg_center_title">📨 消息中心</h2>
+            <div id="message-center-list"></div>
+            <div class="msg-empty" id="message-center-empty" data-i18n="msg_center_empty">暂无消息</div>
+        </div>
+        <div class="btn-row" style="padding:0 16px 16px;display:flex;justify-content:space-between;">
+            <button class="btn-small btn-danger" id="msg-center-clear-all" data-i18n="msg_center_clear_all">清空全部</button>
+            <button class="btn-primary" id="msg-center-close" data-i18n="ok">确定</button>
+        </div>
+    </div>
+</div>
+
+
+<!-- Security off warning modal (non-dismissible by backdrop click) -->
+<div id="security-off-warning-modal" class="modal" style="z-index:2000;">
+    <div class="modal-content" style="max-width:480px;text-align:center;border:2px solid #dc3545;">
+        <div style="font-size:48px;margin-bottom:8px;">⚠️</div>
+        <h2 style="color:#dc3545;" data-i18n="security_off_title">⚠️ Security Warning</h2>
+        <p style="font-size:14px;color:#333;margin:12px 0;line-height:1.6;" data-i18n="security_off_desc">
+            You are about to <b style="color:#dc3545;">disable ALL plugin security checks</b>.
+        </p>
+        <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:10px;margin:10px 0;text-align:left;font-size:12px;color:#856404;">
+            <b data-i18n="security_off_means">This means:</b><br>
+            • <span data-i18n="security_off_item1">No AST code audit before loading</span><br>
+            • <span data-i18n="security_off_item2">No import restrictions</span><br>
+            • <span data-i18n="security_off_item3">No permission checks</span><br>
+            • <span data-i18n="security_off_item4">Any plugin code can execute freely</span><br>
+            <br>
+            <b data-i18n="security_off_note">Only the jailbreak guard and NORP Safe system will still protect you.</b>
+        </div>
+        <p style="font-size:13px;color:#dc3545;font-weight:700;margin:8px 0;" data-i18n="security_off_confirm_q">
+            Are you absolutely sure you want to proceed?
+        </p>
+        <p style="font-size:11px;color:#888;" data-i18n="security_off_dismiss_note">This dialog cannot be dismissed by clicking outside — you must make a choice.</p>
+        <div class="btn-row" style="justify-content:center;gap:12px;margin-top:16px;">
+            <button class="btn-secondary" id="security-off-cancel-btn" style="min-width:100px;" data-i18n="security_off_cancel">↩ Cancel</button>
+            <button class="btn-primary" id="security-off-confirm-btn" style="min-width:100px;background:#dc3545;border-color:#dc3545;" data-i18n="security_off_confirm_btn">⚠ I Understand</button>
+        </div>
+    </div>
+</div>
+<!-- NORP Safety off warning modal (non-dismissible by backdrop click) -->
+<div id="norp-safety-off-warning-modal" class="modal" style="z-index:2000;">
+    <div class="modal-content" style="max-width:500px;text-align:center;border:3px solid #b71c1c;background:#fffbfb;">
+        <div style="font-size:52px;margin-bottom:6px;">🛡️⚠️</div>
+        <h2 style="color:#b71c1c;font-size:18px;" data-i18n="norp_safety_off_title">⚠️ CRITICAL SAFETY WARNING</h2>
+        <p style="font-size:14px;color:#333;margin:12px 0;line-height:1.6;" data-i18n="norp_safety_off_desc">
+            You are about to <b style="color:#b71c1c;">DISABLE the NORP Safety System</b> — the <b style="color:#b71c1c;">FINAL security barrier</b>.
+        </p>
+        <div style="background:#ffebee;border:2px solid #dc3545;border-radius:6px;padding:12px;margin:10px 0;text-align:left;font-size:12px;color:#b71c1c;">
+            <b data-i18n="norp_safety_off_means">With NORP Safety OFF:</b><br>
+            <div style="margin-top:6px;line-height:1.8;">
+            • <span data-i18n="norp_safety_off_item1">ALL dangerous commands execute freely (rm -rf /, format C:, del /F /S, etc.)</span><br>
+            • <span data-i18n="norp_safety_off_item2">UAC elevation / admin privilege escalation is allowed</span><br>
+            • <span data-i18n="norp_safety_off_item3">Path traversal outside the project workspace is permitted</span><br>
+            • <span data-i18n="norp_safety_off_item4">Any destructive operation on your system becomes possible</span>
+            </div>
+            <br>
+            <b style="color:#b71c1c;" data-i18n="norp_safety_off_note">⚠️ There will be NO remaining protection layer. The Agent can do ANYTHING.</b>
+        </div>
+        <p style="font-size:14px;color:#b71c1c;font-weight:700;margin:8px 0;" data-i18n="norp_safety_off_confirm_q">
+            Are you absolutely sure you want to DISABLE all safety protections?
+        </p>
+        <p style="font-size:11px;color:#888;">This dialog cannot be dismissed by clicking outside — you must make a choice.</p>
+        <div class="btn-row" style="justify-content:center;gap:12px;margin-top:16px;">
+            <button class="btn-secondary" id="norp-safety-off-cancel-btn" style="min-width:100px;" data-i18n="norp_safety_off_cancel">↩ Cancel</button>
+            <button class="btn-primary" id="norp-safety-off-confirm-btn" style="min-width:140px;background:#b71c1c;border-color:#b71c1c;font-weight:700;" data-i18n="norp_safety_off_confirm_btn">⚠️ DISABLE SAFETY</button>
         </div>
     </div>
 </div>
@@ -1840,7 +2438,11 @@ body {
     <iframe id="external-iframe" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
 </div>
 
+
 <script>
+// ═══════════════════════════════════════════════════════════════
+//  I18N — Multi-language support (5 languages)
+// ═══════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
 //  I18N — Multi-language support (5 languages)
 // ═══════════════════════════════════════════════════════════════
@@ -1865,6 +2467,9 @@ var I18N = {
         "copied": "已复制",
         "copy_failed": "复制失败",
         "language_label": "🌐 界面语言 / Language",
+        "close_behavior_label": "🪟 关闭按钮默认行为",
+        "close_behavior_tray": "最小化到任务栏托盘",
+        "close_behavior_exit": "直接退出程序",
         "settings_title": "设置",
         "model_label": "模型",
         "api_base_label": "API 基础 URL",
@@ -1923,6 +2528,18 @@ var I18N = {
         "security_permissions_desc": "启用后，插件必须在 manifest.json 的 permissions 字段中声明所需能力（process、network、file_write、file_read）。",
         "security_resource": "启用资源限制",
         "security_resource_desc": "插件加载时限制 CPU 时间（30秒）和内存（512MB）。使用操作系统级限制（Unix: setrlimit；Windows: 尽力而为）。",
+        "security_off_title": "⚠️ 安全警告",
+        "security_off_desc": "您即将<b style=\"color:#dc3545;\">关闭所有插件安全检查</b>。",
+        "security_off_means": "这意味着：",
+        "security_off_item1": "加载前不进行 AST 代码审计",
+        "security_off_item2": "无导入限制",
+        "security_off_item3": "无权限检查",
+        "security_off_item4": "任何插件代码均可自由执行",
+        "security_off_note": "只有越狱防护和 NORP 安全系统仍会保护您。",
+        "security_off_confirm_q": "您确定要继续吗？",
+        "security_off_dismiss_note": "此对话框无法通过点击外部关闭 — 您必须做出选择。",
+        "security_off_cancel": "↩ 取消",
+        "security_off_confirm_btn": "⚠ 我已知晓",
         "restore_defaults": "恢复默认值",
         "cancel": "取消",
         "save": "保存",
@@ -1963,6 +2580,7 @@ var I18N = {
         "welcome_setup": "欢迎！设置完成。",
         "welcome_skip": "您可以稍后在设置中配置 API 密钥。",
         "agent_running_confirm": "Agent正在运行，确定关闭吗？",
+        "tab_name_duplicate": "已存在同名标签页，请使用其他名称",
         "confirm_operation": "确认操作",
         "confirm_write_msg": "确定要{0} {1} 吗？",
         "confirm_delete_warn": "此操作不可逆，请谨慎操作。",
@@ -2042,6 +2660,75 @@ var I18N = {
         "history_header": "以下为历史对话记忆，请不要回复该内容",
         "history_conversation": "历史对话",
         "total_tokens": "累计 Tokens",
+        "norp_safety_section": "🛡️ NORP 安全系统",
+        "norp_safety_enable": "启用安全系统",
+        "norp_safety_enable_desc": "拦截危险命令（如 rm -rf /、format C:）、UAC 提权和路径越界。",
+        "norp_safety_disable_warning": "⚠️ 关闭安全系统将使 Agent 可以执行任何命令，包括删除系统文件、格式化磁盘、修改注册表等破坏性操作。\n\n此功能仅适用于完全隔离的测试环境。关闭安全系统的风险由您自行承担。\n\n确定要关闭吗？",
+        "norp_safety_disable_confirm": "我了解风险，关闭安全系统",
+        "norp_safety_enabled_status": "✅ 安全系统已启用 — 危险操作将被拦截",
+        "norp_safety_disabled_status": "⚠️ 安全系统已关闭 — 所有操作直接放行",
+        "norp_safety_warning_bar": "⛔ 安全系统已关闭 — 智能体行为不再受保护",
+        "norp_safety_off_title": "⛔ 严重安全警告",
+        "norp_safety_off_desc": "您即将<b style=\"color:#b71c1c;\">关闭 NORP 安全系统</b> — 这是<b style=\"color:#b71c1c;\">最后一道安全防线</b>。",
+        "norp_safety_off_means": "关闭安全系统后：",
+        "norp_safety_off_item1": "所有危险命令将直接执行（rm -rf /、format C:、del /F /S 等）",
+        "norp_safety_off_item2": "UAC 提权 / 管理员权限提升将被允许",
+        "norp_safety_off_item3": "允许访问工作区之外的任意系统路径",
+        "norp_safety_off_item4": "任何对系统的破坏性操作都可能发生",
+        "norp_safety_off_note": "⚠️ 将没有任何保护层剩余。Agent 可以为所欲为。",
+        "norp_safety_off_confirm_q": "您确定要关闭所有安全保护吗？",
+        "norp_safety_off_cancel": "↩ 取消",
+        "norp_safety_off_confirm_btn": "⛔ 关闭安全系统",
+        "jailbreak_guard_section": "🔒 越狱/注入防护",
+        "jailbreak_guard_enable": "启用越狱/注入检测",
+        "jailbreak_guard_enable_desc": "检测并拦截试图绕过安全约束的提示词注入攻击（DAN、角色覆写、系统提示词泄露等）。关闭后所有消息将直接放行。",
+        "jailbreak_guard_action_label": "检测到攻击时的操作：",
+        "jailbreak_guard_action_block": "拦截消息（推荐）",
+        "jailbreak_guard_action_warn": "仅记录日志警告",
+        "jailbreak_guard_enabled_status": "✅ 越狱防护已启用 — 恶意注入将被拦截",
+        "jailbreak_guard_disabled_status": "⚠️ 越狱防护已关闭 — 提示词注入攻击不会被检测",
+        "messages": "📨 消息",
+        "msg_center_title": "📨 消息中心",
+        "msg_center_empty": "暂无消息",
+        "msg_center_clear_all": "清空全部",
+        "msg_delete": "删除",
+        "norp_notif_header": "安全拦截",
+        "norp_notif_type": "类型",
+        "norp_notif_status": "状态",
+        "norp_notif_blocked": "已拦截",
+        "norp_notif_tab": "来自",
+        "runtime_health_title": "🩺 运行时健康检查",
+        "runtime_health_loading": "正在加载...",
+        "runtime_health_refresh": "🔄 刷新",
+        "runtime_health_toggle_expand": "展开详情",
+        "runtime_health_toggle_collapse": "收起详情",
+        "runtime_health_no_data": "无法获取健康检查数据",
+        "runtime_health_fatal": "检测到 {count} 个致命问题 — 程序可能无法正常运行",
+        "runtime_health_error": "检测到 {count} 个错误 — 部分功能不可用",
+        "runtime_health_warning": "检测到 {count} 个警告 — 部分功能降级",
+        "runtime_health_ok": "所有检查通过 — 运行环境健康",
+        "runtime_health_failed": "健康检查失败: {error}",
+        "runtime_env_sandbox": " ⚡ Windows Sandbox",
+        "runtime_env_docker": " 🐳 Docker",
+        "runtime_env_vm": " 💻 虚拟机",
+        "runtime_env_wine": " 🍷 Wine",
+        "custom_prompt_title": "📝 自定义系统提示词",
+        "custom_prompt_enable": "启用自定义系统提示词",
+        "custom_prompt_desc": "启用后将使用下方自定义提示词替换默认系统提示词。默认提示词包含工具调用说明和插件系统指南。",
+        "custom_prompt_source_label": "提示词来源",
+        "custom_prompt_source_text": "📝 手动输入",
+        "custom_prompt_source_file": "📁 从文件导入（.md / .txt）",
+        "custom_prompt_content_label": "提示词内容",
+        "custom_prompt_placeholder": "在此输入自定义系统提示词...",
+        "custom_prompt_import_file_label": "导入文件",
+        "custom_prompt_no_file": "未选择文件",
+        "custom_prompt_browse": "📂 浏览",
+        "custom_prompt_format_hint": "支持 .md 和 .txt 格式",
+        "loading": "加载中...",
+        "loading_all_ready": "一切就绪",
+        "loading_fatal_issues": "{0} 个致命问题",
+        "loading_failed": "启动失败",
+        "loading_exit": "退出程序",
     },
     "zh_TW": {
         "app_title": "NORP Agent",
@@ -2063,6 +2750,9 @@ var I18N = {
         "copied": "已複製",
         "copy_failed": "複製失敗",
         "language_label": "🌐 介面語言 / Language",
+        "close_behavior_label": "🪟 關閉按鈕預設行為",
+        "close_behavior_tray": "最小化到工作列托盤",
+        "close_behavior_exit": "直接退出程式",
         "settings_title": "設定",
         "model_label": "模型",
         "api_base_label": "API 基礎 URL",
@@ -2121,6 +2811,18 @@ var I18N = {
         "security_permissions_desc": "啟用後，外掛必須在 manifest.json 的 permissions 欄位中宣告所需能力（process、network、file_write、file_read）。",
         "security_resource": "啟用資源限制",
         "security_resource_desc": "外掛載入時限制 CPU 時間（30秒）和記憶體（512MB）。使用作業系統級限制（Unix: setrlimit；Windows: 盡力而為）。",
+        "security_off_title": "⚠️ 安全警告",
+        "security_off_desc": "您即將<b style=\"color:#dc3545;\">關閉所有外掛安全檢查</b>。",
+        "security_off_means": "這意味著：",
+        "security_off_item1": "載入前不進行 AST 程式碼審計",
+        "security_off_item2": "無匯入限制",
+        "security_off_item3": "無權限檢查",
+        "security_off_item4": "任何外掛程式碼均可自由執行",
+        "security_off_note": "只有越獄防護和 NORP 安全系統仍會保護您。",
+        "security_off_confirm_q": "您確定要繼續嗎？",
+        "security_off_dismiss_note": "此對話框無法透過點擊外部關閉 — 您必須做出選擇。",
+        "security_off_cancel": "↩ 取消",
+        "security_off_confirm_btn": "⚠ 我已知曉",
         "restore_defaults": "恢復預設值",
         "cancel": "取消",
         "save": "儲存",
@@ -2161,6 +2863,7 @@ var I18N = {
         "welcome_setup": "歡迎！設定完成。",
         "welcome_skip": "您可以稍後在設定中配置 API 金鑰。",
         "agent_running_confirm": "Agent正在執行，確定關閉嗎？",
+        "tab_name_duplicate": "已存在同名分頁，請使用其他名稱",
         "confirm_operation": "確認操作",
         "confirm_write_msg": "確定要{0} {1} 嗎？",
         "confirm_delete_warn": "此操作無法復原，請謹慎操作。",
@@ -2240,6 +2943,75 @@ var I18N = {
         "history_header": "以下為歷史對話記憶，請不要回覆該內容",
         "history_conversation": "歷史對話",
         "total_tokens": "累計 Tokens",
+        "norp_safety_section": "🛡️ NORP 安全系統",
+        "norp_safety_enable": "啟用安全系統",
+        "norp_safety_enable_desc": "攔截危險命令（如 rm -rf /、format C:）、UAC 提權和路徑越界。",
+        "norp_safety_disable_warning": "⚠️ 關閉安全系統將使 Agent 可以執行任何命令，包括刪除系統檔案、格式化磁碟、修改登錄檔等破壞性操作。\n\n此功能僅適用於完全隔離的測試環境。關閉安全系統的風險由您自行承擔。\n\n確定要關閉嗎？",
+        "norp_safety_disable_confirm": "我了解風險，關閉安全系統",
+        "norp_safety_enabled_status": "✅ 安全系統已啟用 — 危險操作將被攔截",
+        "norp_safety_disabled_status": "⚠️ 安全系統已關閉 — 所有操作直接放行",
+        "norp_safety_warning_bar": "⛔ 安全系統已關閉 — 智能體行為不再受保護",
+        "norp_safety_off_title": "⛔ 嚴重安全警告",
+        "norp_safety_off_desc": "您即將<b style=\"color:#b71c1c;\">關閉 NORP 安全系統</b> — 這是<b style=\"color:#b71c1c;\">最後一道安全防線</b>。",
+        "norp_safety_off_means": "關閉安全系統後：",
+        "norp_safety_off_item1": "所有危險命令將直接執行（rm -rf /、format C:、del /F /S 等）",
+        "norp_safety_off_item2": "UAC 提權 / 管理員權限提升將被允許",
+        "norp_safety_off_item3": "允許訪問工作區之外的任意系統路徑",
+        "norp_safety_off_item4": "任何對系統的破壞性操作都可能發生",
+        "norp_safety_off_note": "⚠️ 將沒有任何保護層剩餘。Agent 可以為所欲為。",
+        "norp_safety_off_confirm_q": "您確定要關閉所有安全保護嗎？",
+        "norp_safety_off_cancel": "↩ 取消",
+        "norp_safety_off_confirm_btn": "⛔ 關閉安全系統",
+        "jailbreak_guard_section": "🔒 越獄/注入防護",
+        "jailbreak_guard_enable": "啟用越獄/注入檢測",
+        "jailbreak_guard_enable_desc": "檢測並攔截試圖繞過安全約束的提示詞注入攻擊（DAN、角色覆寫、系統提示詞洩露等）。關閉後所有訊息將直接放行。",
+        "jailbreak_guard_action_label": "檢測到攻擊時的操作：",
+        "jailbreak_guard_action_block": "攔截訊息（推薦）",
+        "jailbreak_guard_action_warn": "僅記錄日誌警告",
+        "jailbreak_guard_enabled_status": "✅ 越獄防護已啟用 — 惡意注入將被攔截",
+        "jailbreak_guard_disabled_status": "⚠️ 越獄防護已關閉 — 提示詞注入攻擊不會被檢測",
+        "messages": "📨 訊息",
+        "msg_center_title": "📨 訊息中心",
+        "msg_center_empty": "暫無訊息",
+        "msg_center_clear_all": "清空全部",
+        "msg_delete": "刪除",
+        "norp_notif_header": "安全攔截",
+        "norp_notif_type": "類型",
+        "norp_notif_status": "狀態",
+        "norp_notif_blocked": "已攔截",
+        "norp_notif_tab": "來自",
+        "runtime_health_title": "🩺 執行時健康檢查",
+        "runtime_health_loading": "正在載入...",
+        "runtime_health_refresh": "🔄 重新整理",
+        "runtime_health_toggle_expand": "展開詳情",
+        "runtime_health_toggle_collapse": "收起詳情",
+        "runtime_health_no_data": "無法獲取健康檢查資料",
+        "runtime_health_fatal": "檢測到 {count} 個致命問題 — 程式可能無法正常執行",
+        "runtime_health_error": "檢測到 {count} 個錯誤 — 部分功能不可用",
+        "runtime_health_warning": "檢測到 {count} 個警告 — 部分功能降級",
+        "runtime_health_ok": "所有檢查通過 — 執行環境健康",
+        "runtime_health_failed": "健康檢查失敗: {error}",
+        "runtime_env_sandbox": " ⚡ Windows Sandbox",
+        "runtime_env_docker": " 🐳 Docker",
+        "runtime_env_vm": " 💻 虛擬機",
+        "runtime_env_wine": " 🍷 Wine",
+        "custom_prompt_title": "📝 自訂系統提示詞",
+        "custom_prompt_enable": "啟用自訂系統提示詞",
+        "custom_prompt_desc": "啟用後將使用下方自訂提示詞替換預設系統提示詞。預設提示詞包含工具呼叫說明與插件系統指南。",
+        "custom_prompt_source_label": "提示詞來源",
+        "custom_prompt_source_text": "📝 手動輸入",
+        "custom_prompt_source_file": "📁 從檔案匯入（.md / .txt）",
+        "custom_prompt_content_label": "提示詞內容",
+        "custom_prompt_placeholder": "在此輸入自訂系統提示詞...",
+        "custom_prompt_import_file_label": "匯入檔案",
+        "custom_prompt_no_file": "未選擇檔案",
+        "custom_prompt_browse": "📂 瀏覽",
+        "custom_prompt_format_hint": "支援 .md 與 .txt 格式",
+        "loading": "載入中...",
+        "loading_all_ready": "一切就緒",
+        "loading_fatal_issues": "{0} 個致命問題",
+        "loading_failed": "啟動失敗",
+        "loading_exit": "退出程式",
     },
     "en": {
         "app_title": "NORP Agent",
@@ -2261,6 +3033,9 @@ var I18N = {
         "copied": "Copied",
         "copy_failed": "Copy failed",
         "language_label": "🌐 Interface Language / 界面语言",
+        "close_behavior_label": "🪟 Close Button Behavior",
+        "close_behavior_tray": "Minimize to System Tray",
+        "close_behavior_exit": "Exit Application",
         "settings_title": "Settings",
         "model_label": "Model",
         "api_base_label": "API Base URL",
@@ -2319,6 +3094,18 @@ var I18N = {
         "security_permissions_desc": "When enabled, plugins must declare required capabilities (process, network, file_write, file_read) in their manifest.json → permissions field.",
         "security_resource": "Enable Resource Limits",
         "security_resource_desc": "Restrict CPU time (30s) and memory (512MB) per plugin during loading. Uses OS-level limits (Unix: setrlimit; Windows: best-effort).",
+        "security_off_title": "⚠️ Security Warning",
+        "security_off_desc": "You are about to <b style=\"color:#dc3545;\">disable ALL plugin security checks</b>.",
+        "security_off_means": "This means:",
+        "security_off_item1": "No AST code audit before loading",
+        "security_off_item2": "No import restrictions",
+        "security_off_item3": "No permission checks",
+        "security_off_item4": "Any plugin code can execute freely",
+        "security_off_note": "Only the jailbreak guard and NORP Safe system will still protect you.",
+        "security_off_confirm_q": "Are you absolutely sure you want to proceed?",
+        "security_off_dismiss_note": "This dialog cannot be dismissed by clicking outside — you must make a choice.",
+        "security_off_cancel": "↩ Cancel",
+        "security_off_confirm_btn": "⚠ I Understand",
         "restore_defaults": "Restore Defaults",
         "cancel": "Cancel",
         "save": "Save",
@@ -2359,6 +3146,7 @@ var I18N = {
         "welcome_setup": "Welcome! Setup complete.",
         "welcome_skip": "You can configure your API key later in Settings.",
         "agent_running_confirm": "Agent is running. Are you sure you want to close this tab?",
+        "tab_name_duplicate": "A tab with this name already exists. Please use a different name.",
         "confirm_operation": "Confirm Operation",
         "confirm_write_msg": "Are you sure you want to {0} {1}?",
         "confirm_delete_warn": "This action is irreversible. Please proceed with caution.",
@@ -2438,6 +3226,75 @@ var I18N = {
         "history_header": "The following is historical conversation memory. Do NOT reply to this content.",
         "history_conversation": "Conversation history",
         "total_tokens": "Total Tokens",
+        "norp_safety_section": "🛡️ NORP Safety System",
+        "norp_safety_enable": "Enable Safety System",
+        "norp_safety_enable_desc": "Blocks dangerous commands (e.g. rm -rf /, format C:), UAC elevation, and path traversal.",
+        "norp_safety_disable_warning": "⚠️ Disabling the safety system will allow the Agent to execute ANY command, including deleting system files, formatting disks, modifying the registry, and other destructive operations.\n\nThis is ONLY intended for fully isolated testing environments. You assume all risks of disabling the safety system.\n\nAre you sure you want to disable it?",
+        "norp_safety_disable_confirm": "I understand the risks, disable safety system",
+        "norp_safety_enabled_status": "✅ Safety system enabled — dangerous operations will be blocked",
+        "norp_safety_disabled_status": "⚠️ Safety system DISABLED — all operations allowed",
+        "norp_safety_warning_bar": "⛔ Safety system disabled — Agent behavior is no longer protected",
+        "norp_safety_off_title": "⛔ CRITICAL SAFETY WARNING",
+        "norp_safety_off_desc": "You are about to <b style=\"color:#b71c1c;\">DISABLE the NORP Safety System</b> — the <b style=\"color:#b71c1c;\">FINAL security barrier</b>.",
+        "norp_safety_off_means": "With NORP Safety OFF:",
+        "norp_safety_off_item1": "ALL dangerous commands execute freely (rm -rf /, format C:, del /F /S, etc.)",
+        "norp_safety_off_item2": "UAC elevation / admin privilege escalation is allowed",
+        "norp_safety_off_item3": "Path traversal outside the project workspace is permitted",
+        "norp_safety_off_item4": "Any destructive operation on your system becomes possible",
+        "norp_safety_off_note": "⚠️ There will be NO remaining protection layer. The Agent can do ANYTHING.",
+        "norp_safety_off_confirm_q": "Are you absolutely sure you want to DISABLE all safety protections?",
+        "norp_safety_off_cancel": "↩ Cancel",
+        "norp_safety_off_confirm_btn": "⛔ DISABLE SAFETY",
+        "jailbreak_guard_section": "🔒 Jailbreak / Injection Guard",
+        "jailbreak_guard_enable": "Enable Jailbreak Detection",
+        "jailbreak_guard_enable_desc": "Detect and block prompt injection attacks attempting to bypass safety constraints (DAN, role override, system prompt leak, etc.). All messages will pass through when disabled.",
+        "jailbreak_guard_action_label": "Action when attack detected:",
+        "jailbreak_guard_action_block": "Block message (recommended)",
+        "jailbreak_guard_action_warn": "Log warning only",
+        "jailbreak_guard_enabled_status": "✅ Jailbreak guard enabled — malicious injections will be blocked",
+        "jailbreak_guard_disabled_status": "⚠️ Jailbreak guard disabled — injection attacks will not be detected",
+        "messages": "📨 Messages",
+        "msg_center_title": "📨 Message Center",
+        "msg_center_empty": "No messages",
+        "msg_center_clear_all": "Clear All",
+        "msg_delete": "Delete",
+        "norp_notif_header": "Safety Block",
+        "norp_notif_type": "Type",
+        "norp_notif_status": "Status",
+        "norp_notif_blocked": "BLOCKED",
+        "norp_notif_tab": "From",
+        "runtime_health_title": "🩺 Runtime Health Check",
+        "runtime_health_loading": "Loading...",
+        "runtime_health_refresh": "🔄 Refresh",
+        "runtime_health_toggle_expand": "Show details",
+        "runtime_health_toggle_collapse": "Hide details",
+        "runtime_health_no_data": "Unable to retrieve health check data",
+        "runtime_health_fatal": "Detected {count} fatal issue(s) — program may not function properly",
+        "runtime_health_error": "Detected {count} error(s) — some features are unavailable",
+        "runtime_health_warning": "Detected {count} warning(s) — some features degraded",
+        "runtime_health_ok": "All checks passed — runtime environment healthy",
+        "runtime_health_failed": "Health check failed: {error}",
+        "runtime_env_sandbox": " ⚡ Windows Sandbox",
+        "runtime_env_docker": " 🐳 Docker",
+        "runtime_env_vm": " 💻 Virtual Machine",
+        "runtime_env_wine": " 🍷 Wine",
+        "custom_prompt_title": "📝 Custom System Prompt",
+        "custom_prompt_enable": "Enable custom system prompt",
+        "custom_prompt_desc": "When enabled, the default system prompt will be replaced with your custom prompt below. The default prompt includes tool calling instructions and plugin system guide.",
+        "custom_prompt_source_label": "Prompt Source",
+        "custom_prompt_source_text": "📝 Manual Input",
+        "custom_prompt_source_file": "📁 Import from file (.md / .txt)",
+        "custom_prompt_content_label": "Prompt Content",
+        "custom_prompt_placeholder": "Enter your custom system prompt here...",
+        "custom_prompt_import_file_label": "Import File",
+        "custom_prompt_no_file": "No file selected",
+        "custom_prompt_browse": "📂 Browse",
+        "custom_prompt_format_hint": "Supports .md and .txt formats",
+        "loading": "Loading...",
+        "loading_all_ready": "All Ready",
+        "loading_fatal_issues": "{0} fatal issue(s)",
+        "loading_failed": "Startup Failed",
+        "loading_exit": "Exit",
     },
     "ru": {
         "app_title": "NORP Agent",
@@ -2459,6 +3316,9 @@ var I18N = {
         "copied": "Скопировано",
         "copy_failed": "Ошибка копирования",
         "language_label": "🌐 Язык интерфейса / Language",
+        "close_behavior_label": "🪟 Поведение кнопки закрытия",
+        "close_behavior_tray": "Сворачивать в системный трей",
+        "close_behavior_exit": "Выход из программы",
         "settings_title": "Настройки",
         "model_label": "Модель",
         "api_base_label": "Базовый URL API",
@@ -2517,6 +3377,18 @@ var I18N = {
         "security_permissions_desc": "При включении плагины должны объявить требуемые возможности (process, network, file_write, file_read) в manifest.json → permissions.",
         "security_resource": "Включить лимиты ресурсов",
         "security_resource_desc": "Ограничить процессорное время (30с) и память (512 МБ) на плагин при загрузке. Использует ограничения уровня ОС (Unix: setrlimit; Windows: по возможности).",
+        "security_off_title": "⚠️ Предупреждение безопасности",
+        "security_off_desc": "Вы собираетесь <b style=\"color:#dc3545;\">отключить ВСЕ проверки безопасности плагинов</b>.",
+        "security_off_means": "Это означает:",
+        "security_off_item1": "Без аудита AST-кода перед загрузкой",
+        "security_off_item2": "Без ограничений импорта",
+        "security_off_item3": "Без проверки разрешений",
+        "security_off_item4": "Любой код плагина может выполняться свободно",
+        "security_off_note": "Только защита от взлома и система NORP Safe будут вас защищать.",
+        "security_off_confirm_q": "Вы абсолютно уверены, что хотите продолжить?",
+        "security_off_dismiss_note": "Этот диалог нельзя закрыть щелчком снаружи — вы должны сделать выбор.",
+        "security_off_cancel": "↩ Отмена",
+        "security_off_confirm_btn": "⚠ Я понимаю",
         "restore_defaults": "Сбросить настройки",
         "cancel": "Отмена",
         "save": "Сохранить",
@@ -2557,6 +3429,7 @@ var I18N = {
         "welcome_setup": "Добро пожаловать! Настройка завершена.",
         "welcome_skip": "Вы можете настроить API-ключ позже в Настройках.",
         "agent_running_confirm": "Агент запущен. Вы уверены, что хотите закрыть эту вкладку?",
+        "tab_name_duplicate": "Вкладка с таким именем уже существует. Пожалуйста, используйте другое имя.",
         "confirm_operation": "Подтверждение операции",
         "confirm_write_msg": "Вы уверены, что хотите {0} {1}?",
         "confirm_delete_warn": "Это действие необратимо. Будьте осторожны.",
@@ -2636,6 +3509,75 @@ var I18N = {
         "history_header": "Ниже приведена история разговора. НЕ отвечайте на это содержимое.",
         "history_conversation": "История разговора",
         "total_tokens": "Всего токенов",
+        "norp_safety_section": "🛡️ Система безопасности NORP",
+        "norp_safety_enable": "Включить систему безопасности",
+        "norp_safety_enable_desc": "Блокирует опасные команды (rm -rf /, format C:), повышение UAC и выход за пределы пути.",
+        "norp_safety_disable_warning": "⚠️ Отключение системы безопасности позволит Агенту выполнять ЛЮБЫЕ команды, включая удаление системных файлов, форматирование дисков, изменение реестра и другие разрушительные операции.\n\nЭто ТОЛЬКО для полностью изолированных тестовых сред. Вы принимаете на себя все риски отключения системы безопасности.\n\nВы уверены, что хотите отключить её?",
+        "norp_safety_disable_confirm": "Я понимаю риски, отключить систему безопасности",
+        "norp_safety_enabled_status": "✅ Система безопасности включена — опасные операции будут заблокированы",
+        "norp_safety_disabled_status": "⚠️ Система безопасности ОТКЛЮЧЕНА — все операции разрешены",
+        "norp_safety_warning_bar": "⛔ Система безопасности отключена — поведение агента больше не защищено",
+        "norp_safety_off_title": "⛔ КРИТИЧЕСКОЕ ПРЕДУПРЕЖДЕНИЕ",
+        "norp_safety_off_desc": "Вы собираетесь <b style=\"color:#b71c1c;\">ОТКЛЮЧИТЬ систему безопасности NORP</b> — <b style=\"color:#b71c1c;\">ПОСЛЕДНИЙ барьер защиты</b>.",
+        "norp_safety_off_means": "При отключённой безопасности NORP:",
+        "norp_safety_off_item1": "ВСЕ опасные команды выполняются свободно (rm -rf /, format C:, del /F /S и т.д.)",
+        "norp_safety_off_item2": "Повышение привилегий UAC / администратора разрешено",
+        "norp_safety_off_item3": "Доступ к путям за пределами рабочей области разрешён",
+        "norp_safety_off_item4": "Любые разрушительные операции в системе становятся возможными",
+        "norp_safety_off_note": "⚠️ НЕ останется ни одного уровня защиты. Агент сможет делать ВСЁ ЧТО УГОДНО.",
+        "norp_safety_off_confirm_q": "Вы абсолютно уверены, что хотите ОТКЛЮЧИТЬ все защиты безопасности?",
+        "norp_safety_off_cancel": "↩ Отмена",
+        "norp_safety_off_confirm_btn": "⛔ ОТКЛЮЧИТЬ ЗАЩИТУ",
+        "jailbreak_guard_section": "🔒 Защита от взлома / инъекций",
+        "jailbreak_guard_enable": "Включить защиту от взлома",
+        "jailbreak_guard_enable_desc": "Обнаружение и блокировка атак с внедрением подсказок, пытающихся обойти ограничения безопасности (DAN, переопределение роли, утечка системного промпта и т.д.). При отключении все сообщения проходят свободно.",
+        "jailbreak_guard_action_label": "Действие при обнаружении атаки:",
+        "jailbreak_guard_action_block": "Блокировать сообщение (рекомендуется)",
+        "jailbreak_guard_action_warn": "Только запись в журнал",
+        "jailbreak_guard_enabled_status": "✅ Защита от взлома включена — вредоносные инъекции будут заблокированы",
+        "jailbreak_guard_disabled_status": "⚠️ Защита от взлома отключена — атаки с инъекциями не будут обнаружены",
+        "messages": "📨 Сообщения",
+        "msg_center_title": "📨 Центр сообщений",
+        "msg_center_empty": "Нет сообщений",
+        "msg_center_clear_all": "Очистить всё",
+        "msg_delete": "Удалить",
+        "norp_notif_header": "Блокировка",
+        "norp_notif_type": "Тип",
+        "norp_notif_status": "Статус",
+        "norp_notif_blocked": "ЗАБЛОКИРОВАНО",
+        "norp_notif_tab": "Из",
+        "runtime_health_title": "🩺 Проверка среды выполнения",
+        "runtime_health_loading": "Загрузка...",
+        "runtime_health_refresh": "🔄 Обновить",
+        "runtime_health_toggle_expand": "Показать детали",
+        "runtime_health_toggle_collapse": "Скрыть детали",
+        "runtime_health_no_data": "Не удалось получить данные проверки",
+        "runtime_health_fatal": "Обнаружено {count} критических проблем — программа может работать некорректно",
+        "runtime_health_error": "Обнаружено {count} ошибок — некоторые функции недоступны",
+        "runtime_health_warning": "Обнаружено {count} предупреждений — часть функций ограничена",
+        "runtime_health_ok": "Все проверки пройдены — среда выполнения в норме",
+        "runtime_health_failed": "Ошибка проверки: {error}",
+        "runtime_env_sandbox": " ⚡ Windows Sandbox",
+        "runtime_env_docker": " 🐳 Docker",
+        "runtime_env_vm": " 💻 Виртуальная машина",
+        "runtime_env_wine": " 🍷 Wine",
+        "custom_prompt_title": "📝 Пользовательский системный промпт",
+        "custom_prompt_enable": "Включить пользовательский промпт",
+        "custom_prompt_desc": "После включения системный промпт по умолчанию будет заменён вашим. Стандартный промпт содержит инструкции по вызову инструментов и руководство по плагинам.",
+        "custom_prompt_source_label": "Источник промпта",
+        "custom_prompt_source_text": "📝 Ручной ввод",
+        "custom_prompt_source_file": "📁 Импорт из файла (.md / .txt)",
+        "custom_prompt_content_label": "Содержание промпта",
+        "custom_prompt_placeholder": "Введите ваш системный промпт здесь...",
+        "custom_prompt_import_file_label": "Файл импорта",
+        "custom_prompt_no_file": "Файл не выбран",
+        "custom_prompt_browse": "📂 Обзор",
+        "custom_prompt_format_hint": "Поддерживаются форматы .md и .txt",
+        "loading": "Загрузка...",
+        "loading_all_ready": "Всё готово",
+        "loading_fatal_issues": "{0} критических проблем(ы)",
+        "loading_failed": "Ошибка запуска",
+        "loading_exit": "Выход",
     },
     "ja": {
         "app_title": "NORP Agent",
@@ -2657,6 +3599,9 @@ var I18N = {
         "copied": "コピーしました",
         "copy_failed": "コピー失敗",
         "language_label": "🌐 インターフェース言語 / Language",
+        "close_behavior_label": "🪟 閉じるボタンの動作",
+        "close_behavior_tray": "タスクトレイに最小化",
+        "close_behavior_exit": "プログラムを終了",
         "settings_title": "設定",
         "model_label": "モデル",
         "api_base_label": "APIベースURL",
@@ -2715,6 +3660,18 @@ var I18N = {
         "security_permissions_desc": "有効にすると、プラグインはmanifest.jsonのpermissionsフィールドで必要な機能（process、network、file_write、file_read）を宣言する必要があります。",
         "security_resource": "リソース制限を有効化",
         "security_resource_desc": "読み込み時にプラグインごとのCPU時間（30秒）とメモリ（512MB）を制限します。OSレベルの制限を使用（Unix: setrlimit; Windows: ベストエフォート）。",
+        "security_off_title": "⚠️ セキュリティ警告",
+        "security_off_desc": "あなたは<b style=\"color:#dc3545;\">すべてのプラグインセキュリティチェックを無効化</b>しようとしています。",
+        "security_off_means": "これはつまり：",
+        "security_off_item1": "読み込み前のASTコード監査なし",
+        "security_off_item2": "インポート制限なし",
+        "security_off_item3": "権限チェックなし",
+        "security_off_item4": "あらゆるプラグインコードが自由に実行可能",
+        "security_off_note": "脱獄ガードとNORP安全システムのみが引き続き保護します。",
+        "security_off_confirm_q": "本当に続行してもよろしいですか？",
+        "security_off_dismiss_note": "このダイアログは外部クリックでは閉じられません — 選択が必要です。",
+        "security_off_cancel": "↩ キャンセル",
+        "security_off_confirm_btn": "⚠ 理解しました",
         "restore_defaults": "デフォルトに戻す",
         "cancel": "キャンセル",
         "save": "保存",
@@ -2755,6 +3712,7 @@ var I18N = {
         "welcome_setup": "ようこそ！セットアップが完了しました。",
         "welcome_skip": "APIキーは後で設定から構成できます。",
         "agent_running_confirm": "エージェントが実行中です。このタブを閉じてもよろしいですか？",
+        "tab_name_duplicate": "同じ名前のタブが既に存在します。別の名前を使用してください。",
         "confirm_operation": "操作の確認",
         "confirm_write_msg": "{0} {1} してもよろしいですか？",
         "confirm_delete_warn": "この操作は元に戻せません。慎重に進めてください。",
@@ -2834,6 +3792,75 @@ var I18N = {
         "history_header": "以下は過去の会話の記憶です。この内容には返信しないでください。",
         "history_conversation": "会話履歴",
         "total_tokens": "合計トークン",
+        "norp_safety_section": "🛡️ NORP セーフティシステム",
+        "norp_safety_enable": "セーフティシステムを有効化",
+        "norp_safety_enable_desc": "危険なコマンド（rm -rf /、format C: など）、UAC昇格、パス越境をブロックします。",
+        "norp_safety_disable_warning": "⚠️ セーフティシステムを無効にすると、Agentはシステムファイルの削除、ディスクのフォーマット、レジストリの変更など、あらゆる破壊的操作を実行できるようになります。\n\nこれは完全に隔離されたテスト環境のみを対象としています。セーフティシステムを無効化するリスクはすべてユーザーが負います。\n\n本当に無効にしますか？",
+        "norp_safety_disable_confirm": "リスクを理解し、セーフティシステムを無効にする",
+        "norp_safety_enabled_status": "✅ セーフティシステム有効 — 危険な操作はブロックされます",
+        "norp_safety_disabled_status": "⚠️ セーフティシステム無効 — すべての操作が許可されます",
+        "norp_safety_warning_bar": "⛔ セーフティシステム無効 — エージェントの動作は保護されていません",
+        "norp_safety_off_title": "⛔ 重大な安全警告",
+        "norp_safety_off_desc": "<b style=\"color:#b71c1c;\">NORPセーフティシステム</b> — <b style=\"color:#b71c1c;\">最後の安全バリア</b>を<b style=\"color:#b71c1c;\">無効化</b>しようとしています。",
+        "norp_safety_off_means": "NORPセーフティが無効になると：",
+        "norp_safety_off_item1": "すべての危険なコマンドが自由に実行されます（rm -rf /、format C:、del /F /S など）",
+        "norp_safety_off_item2": "UAC昇格 / 管理者権限の昇格が許可されます",
+        "norp_safety_off_item3": "プロジェクトワークスペース外のパスへのアクセスが許可されます",
+        "norp_safety_off_item4": "システムへのあらゆる破壊的操作が可能になります",
+        "norp_safety_off_note": "⚠️ 保護層は一切残りません。Agentは何でもできてしまいます。",
+        "norp_safety_off_confirm_q": "すべての安全保護を無効にしても本当によろしいですか？",
+        "norp_safety_off_cancel": "↩ キャンセル",
+        "norp_safety_off_confirm_btn": "⛔ セーフティを無効化",
+        "jailbreak_guard_section": "🔒 脱獄/インジェクションガード",
+        "jailbreak_guard_enable": "脱獄検出を有効化",
+        "jailbreak_guard_enable_desc": "安全制約を回避しようとするプロンプトインジェクション攻撃（DAN、ロールオーバーライド、システムプロンプト漏洩など）を検出・ブロックします。無効にするとすべてのメッセージが通過します。",
+        "jailbreak_guard_action_label": "攻撃検出時のアクション：",
+        "jailbreak_guard_action_block": "メッセージをブロック（推奨）",
+        "jailbreak_guard_action_warn": "ログ警告のみ",
+        "jailbreak_guard_enabled_status": "✅ 脱獄ガード有効 — 悪意のあるインジェクションはブロックされます",
+        "jailbreak_guard_disabled_status": "⚠️ 脱獄ガード無効 — インジェクション攻撃は検出されません",
+        "messages": "📨 メッセージ",
+        "msg_center_title": "📨 メッセージセンター",
+        "msg_center_empty": "メッセージなし",
+        "msg_center_clear_all": "すべて削除",
+        "msg_delete": "削除",
+        "norp_notif_header": "安全ブロック",
+        "norp_notif_type": "種類",
+        "norp_notif_status": "状態",
+        "norp_notif_blocked": "ブロック済",
+        "norp_notif_tab": "送信元",
+        "runtime_health_title": "🩺 ランタイム健全性チェック",
+        "runtime_health_loading": "読み込み中...",
+        "runtime_health_refresh": "🔄 更新",
+        "runtime_health_toggle_expand": "詳細を表示",
+        "runtime_health_toggle_collapse": "詳細を隠す",
+        "runtime_health_no_data": "健全性チェックデータを取得できません",
+        "runtime_health_fatal": "{count} 件の致命的な問題を検出 — プログラムが正常に動作しない可能性があります",
+        "runtime_health_error": "{count} 件のエラーを検出 — 一部の機能が利用できません",
+        "runtime_health_warning": "{count} 件の警告を検出 — 一部の機能が制限されています",
+        "runtime_health_ok": "すべてのチェックに合格 — ランタイム環境は健全です",
+        "runtime_health_failed": "健全性チェック失敗: {error}",
+        "runtime_env_sandbox": " ⚡ Windows Sandbox",
+        "runtime_env_docker": " 🐳 Docker",
+        "runtime_env_vm": " 💻 仮想マシン",
+        "runtime_env_wine": " 🍷 Wine",
+        "custom_prompt_title": "📝 カスタムシステムプロンプト",
+        "custom_prompt_enable": "カスタムシステムプロンプトを有効化",
+        "custom_prompt_desc": "有効にすると、デフォルトのシステムプロンプトが以下のカスタムプロンプトに置き換えられます。デフォルトプロンプトにはツール呼び出し手順とプラグインシステムガイドが含まれています。",
+        "custom_prompt_source_label": "プロンプトソース",
+        "custom_prompt_source_text": "📝 手動入力",
+        "custom_prompt_source_file": "📁 ファイルからインポート（.md / .txt）",
+        "custom_prompt_content_label": "プロンプト内容",
+        "custom_prompt_placeholder": "カスタムシステムプロンプトをここに入力...",
+        "custom_prompt_import_file_label": "インポートファイル",
+        "custom_prompt_no_file": "ファイルが選択されていません",
+        "custom_prompt_browse": "📂 参照",
+        "custom_prompt_format_hint": ".md および .txt 形式に対応",
+        "loading": "読み込み中...",
+        "loading_all_ready": "準備完了",
+        "loading_fatal_issues": "{0} 件の致命的な問題",
+        "loading_failed": "起動失敗",
+        "loading_exit": "終了",
     }
 };
 
@@ -2853,7 +3880,14 @@ function setLanguage(lang) {
         var el = elements[i];
         var key = el.getAttribute('data-i18n');
         if (key) {
-            el.textContent = t(key, lang);
+            var val = t(key, lang);
+            // Use innerHTML for translations containing HTML markup (e.g. <b>),
+            // textContent otherwise to avoid XSS from user-supplied values.
+            if (/<[a-zA-Z][^>]*>/.test(val)) {
+                el.innerHTML = val;
+            } else {
+                el.textContent = val;
+            }
         }
     }
     // Update all elements with data-i18n-placeholder attribute
@@ -2889,14 +3923,84 @@ function tf(key, lang) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
 //  MULTI-TAB SUPPORT — like browser tabs
 // ═══════════════════════════════════════════════════════════════
+//  MULTI-TAB SUPPORT — like browser tabs
+// ═══════════════════════════════════════════════════════════════
+//  ★ Tab persistence via localStorage — survives OOM crashes & refreshes
 
 var tabs = [];
 var activeTabId = null;
 var tabIdCounter = 0;
 
 var MAX_TABS = 16;
+var TAB_STORAGE_KEY = 'norp_agent_tabs';
+var _tabSaveTimer = null;
+var _tabSaveInterval = 5000;  // auto-save every 5s
+
+// ── Tab persistence ──
+
+function saveTabsToStorage() {
+    try {
+        var data = [];
+        for (var i = 0; i < tabs.length; i++) {
+            var t = tabs[i];
+            data.push({
+                uiId: t.uiId,
+                dbId: t.dbId,
+                title: t.title,
+                workspace: t.workspace || '',
+                isActive: t.uiId === activeTabId
+            });
+        }
+        localStorage.setItem(TAB_STORAGE_KEY, JSON.stringify(data));
+    } catch(e) {
+        // localStorage may be full or unavailable — silently ignore
+    }
+}
+
+function loadTabsFromStorage() {
+    try {
+        var raw = localStorage.getItem(TAB_STORAGE_KEY);
+        if (!raw) return [];
+        var data = JSON.parse(raw);
+        if (!Array.isArray(data)) return [];
+        return data;
+    } catch(e) {
+        return [];
+    }
+}
+
+function scheduleTabSave() {
+    if (_tabSaveTimer) clearTimeout(_tabSaveTimer);
+    _tabSaveTimer = setTimeout(function() {
+        saveTabsToStorage();
+        _tabSaveTimer = null;
+    }, 300);  // debounce 300ms
+}
+
+// Auto-save periodically (belt-and-suspenders with debounced save)
+setInterval(function() {
+    saveTabsToStorage();
+}, _tabSaveInterval);
+
+// Save on page unload (before crash/refresh)
+window.addEventListener('beforeunload', function() {
+    saveTabsToStorage();
+});
+
+// ── Duplicate tab name check ──
+function isTabNameDuplicate(name, excludeUiId) {
+    name = (name || '').trim().toLowerCase();
+    if (!name) return false;
+    for (var i = 0; i < tabs.length; i++) {
+        if (tabs[i].uiId === excludeUiId) continue;
+        if (tabs[i].title.trim().toLowerCase() === name) return true;
+    }
+    return false;
+}
 
 function createTabState(sessionId, title, workspace) {
     var id = 'tab_' + (++tabIdCounter);
@@ -2926,6 +4030,9 @@ function createTabState(sessionId, title, workspace) {
 
         // File attachments
         selectedFiles: [],
+
+        // Per-tab input state
+        inputValue: '',
 
         // Pending modals — deferred until user switches to this tab
         pendingQuestion: null,   // {text: string, sessionId: string}
@@ -2989,6 +4096,7 @@ function createTab(sessionId, title, makeActive, useDefaultPanels, workspace) {
     }
 
     updateTabBar();
+    scheduleTabSave();
     return tab;
 }
 
@@ -3016,6 +4124,7 @@ function switchToTab(uiId) {
             oldTab.currentReplyEl = currentReplyEl;
             oldTab.currentCmdEl = currentCmdEl;
             oldTab.selectedFiles = selectedFiles;
+            oldTab.inputValue = userInput.value;
             // Polling is per-tab — never paused, each tab manages its own timer
 
             // Save ask_user modal state if it belongs to this tab
@@ -3058,6 +4167,8 @@ function switchToTab(uiId) {
     currentReplyEl = newTab.currentReplyEl;
     currentCmdEl = newTab.currentCmdEl;
     selectedFiles = newTab.selectedFiles || [];
+    userInput.value = newTab.inputValue || '';
+    resetTextareaHeight();
     updateFileBadges();
 
     // Update token display for the newly active tab
@@ -3108,6 +4219,14 @@ function switchToTab(uiId) {
 
     // Focus input
     setTimeout(function() { userInput.focus(); }, 50);
+
+    // ★ Lazy history load for restored tabs
+    if (newTab._needsHistoryLoad) {
+        newTab._needsHistoryLoad = false;
+        loadHistoryForTab(newTab);
+    }
+
+    scheduleTabSave();
 }
 
 function closeTab(uiId) {
@@ -3159,6 +4278,7 @@ function closeTab(uiId) {
     // Recalculate header token total after tab removal
     recalcGrandTotalTokens();
     updateHeaderTokensDisplay();
+    scheduleTabSave();
 }
 
 function updateTabBar() {
@@ -3221,7 +4341,13 @@ function updateTabBar() {
             if (!tab) return;
             var newTitle = prompt('Rename tab:', tab.title);
             if (newTitle && newTitle.trim()) {
-                tab.title = newTitle.trim();
+                newTitle = newTitle.trim();
+                if (isTabNameDuplicate(newTitle, tab.uiId)) {
+                    showToast(t('tab_name_duplicate') || 'A tab with this name already exists');
+                    return;
+                }
+                tab.title = newTitle;
+                scheduleTabSave();
                 updateTabBar();
                 if (tab.dbId) {
                     try { window.pywebview.api.set_session_title(tab.dbId, tab.title); } catch(e) {}
@@ -3268,7 +4394,13 @@ function createTabContextMenu() {
         } else if (action === 'rename') {
             var newTitle = prompt('Rename tab:', tab.title);
             if (newTitle && newTitle.trim()) {
-                tab.title = newTitle.trim();
+                newTitle = newTitle.trim();
+                if (isTabNameDuplicate(newTitle, tab.uiId)) {
+                    showToast(t('tab_name_duplicate') || 'A tab with this name already exists');
+                    return;
+                }
+                tab.title = newTitle;
+                scheduleTabSave();
                 updateTabBar();
                 if (tab.dbId) {
                     try { window.pywebview.api.set_session_title(tab.dbId, tab.title); } catch(e) {}
@@ -3347,7 +4479,146 @@ async function promptTabWorkspace(tab) {
     if (newWs) {
         showToast('📁 Workspace: ' + newWs);
     }
+    scheduleTabSave();
 }
+
+// ── Tab restoration after crash/refresh ──
+// Called from main.js after the first tab is created.
+// Reconciles localStorage tab metadata with backend sessions.
+
+async function restoreTabsAfterCrash(firstTab) {
+    var savedTabs = loadTabsFromStorage();
+    if (!savedTabs || savedTabs.length <= 1) {
+        // Nothing to restore, or only one tab (the one we just created)
+        return;
+    }
+
+    // Get all backend sessions
+    var backendSessions = [];
+    try {
+        backendSessions = await window.pywebview.api.get_sessions();
+        if (!backendSessions || !backendSessions.length) return;
+    } catch(e) {
+        console.warn('Failed to get backend sessions for tab restore:', e);
+        return;
+    }
+
+    // Build a map of backend session IDs
+    var backendMap = {};
+    for (var i = 0; i < backendSessions.length; i++) {
+        backendMap[backendSessions[i].id] = backendSessions[i];
+    }
+
+    // The first tab already exists — update its title/workspace from saved state
+    for (var j = 0; j < savedTabs.length; j++) {
+        if (savedTabs[j].dbId === firstTab.dbId) {
+            if (savedTabs[j].title && savedTabs[j].title !== 'Tab 1') {
+                firstTab.title = savedTabs[j].title;
+            }
+            if (savedTabs[j].workspace) {
+                firstTab.workspace = savedTabs[j].workspace;
+                updateWorkspaceDisplay(firstTab.workspace);
+            }
+            break;
+        }
+    }
+
+    // Restore additional tabs that have valid backend sessions
+    for (var k = 0; k < savedTabs.length; k++) {
+        var st = savedTabs[k];
+        // Skip the first tab (already exists)
+        if (st.dbId === firstTab.dbId) continue;
+
+        // Check if backend session still exists
+        if (!backendMap[st.dbId]) continue;
+
+        // Check we don't exceed max tabs
+        if (tabs.length >= MAX_TABS) break;
+
+        // Create the tab shell (reuse existing backend session)
+        var restoredTab = createTabState(st.dbId, st.title || 'Tab', st.workspace || '');
+        // Override uiId to match saved state
+        restoredTab.uiId = st.uiId;
+        // Ensure tabIdCounter is ahead of any restored IDs
+        var numPart = parseInt(st.uiId.replace('tab_', ''));
+        if (!isNaN(numPart) && numPart >= tabIdCounter) {
+            tabIdCounter = numPart;
+        }
+        tabs.push(restoredTab);
+        createTabPanels(restoredTab);
+
+        // Mark that messages need loading when this tab is first activated
+        restoredTab._needsHistoryLoad = true;
+
+        // Start polling if there's a running task on this session
+        if (backendMap[st.dbId] && backendMap[st.dbId].has_task) {
+            restoredTab.isStreaming = true;
+            restoredTab.isWaiting = false;
+            startPolling(restoredTab);
+        }
+    }
+
+    // Switch to the previously active tab
+    for (var m = 0; m < savedTabs.length; m++) {
+        if (savedTabs[m].isActive) {
+            var targetTab = getTab(savedTabs[m].uiId);
+            if (targetTab && targetTab.uiId !== firstTab.uiId) {
+                switchToTab(targetTab.uiId);
+            }
+            break;
+        }
+    }
+
+    updateTabBar();
+}
+
+// Lazy-load history for a restored tab when first activated
+async function loadHistoryForTab(tab) {
+    if (!tab || !tab.dbId || !tab.chatContent) return;
+    try {
+        var msgs = await window.pywebview.api.get_initial_messages(tab.dbId);
+        if (!msgs || !msgs.length) return;
+        tab.messages = msgs;
+
+        // Render messages using the same pattern as loadHistory()
+        var savedChat = chatContent;
+        chatContent = tab.chatContent;
+        for (var i = 0; i < msgs.length; i++) {
+            var msg = msgs[i];
+            var div = document.createElement('div');
+            div.className = 'message';
+            if (msg.role === 'user') {
+                div.className += ' user-msg';
+                var userInner = document.createElement('div');
+                userInner.className = 'user-text';
+                userInner.style.whiteSpace = 'pre-wrap';
+                userInner.textContent = msg.content || '';
+                div.appendChild(userInner);
+            } else {
+                div.className += ' assistant-msg';
+                var inner = document.createElement('div');
+                inner.className = 'assistant-text';
+                inner.dataset.raw = msg.content || '';
+                inner.innerHTML = renderContent(msg.content || '');
+                var copyBtn = document.createElement('button');
+                copyBtn.className = 'copy-reply-btn';
+                copyBtn.textContent = 'Copy';
+                copyBtn.style.display = 'inline-block';
+                inner.appendChild(copyBtn);
+                div.appendChild(inner);
+            }
+            tab.chatContent.appendChild(div);
+        }
+        tab.chatContent.scrollTop = tab.chatContent.scrollHeight;
+        chatContent = savedChat;
+    } catch(e) {
+        console.warn('Failed to load history for tab:', tab.dbId, e);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  CORE — Global state, rendering, streaming, polling
+// ═══════════════════════════════════════════════════════════════
 // ── Global state (some per-tab, some shared) ──
 var isWaiting = false;
 var isStreaming = false;
@@ -3374,6 +4645,8 @@ var settingsModal = document.getElementById('settings-modal');
 var apikeyModal = document.getElementById('apikey-modal');
 var aboutModal = document.getElementById('about-modal');
 var firstrunModal = document.getElementById('firstrun-modal');
+var securityOffWarningModal = document.getElementById('security-off-warning-modal');
+var norpSafetyOffWarningModal = document.getElementById('norp-safety-off-warning-modal');
 var askUserModal = document.getElementById('ask-user-modal');
 var askUserQuestion = document.getElementById('ask-user-question');
 var askUserReplyInput = document.getElementById('ask-user-reply-input');
@@ -3389,6 +4662,364 @@ var confirmWriteCancelBtn = document.getElementById('confirm-write-cancel-btn');
 var _pendingConfirmSessionId = '';
 var _pendingAskSessionId = '';
 var _pendingAskQuestionRaw = '';
+
+// ── Message Center ──
+var messageCenter = [];  // {id, type:'blocked'|'ask'|'plugin'|'crash', title, detail, tabName, time}
+var _msgIdCounter = 0;
+
+// ── Crash Recovery State ──
+var _crashRetryTimer = null;
+var _crashRetryCount = 0;
+var _crashRetryMax = 3;
+var _crashNotificationEl = null;
+var _lastCrashReason = '';
+
+// ── NORP Notification ──
+function showNorpNotification(blockedType, detail, tabName) {
+    var container = document.getElementById('norp-notification-container');
+    var now = new Date();
+    var timeStr = now.getHours().toString().padStart(2,'0') + ':' +
+                  now.getMinutes().toString().padStart(2,'0') + ':' +
+                  now.getSeconds().toString().padStart(2,'0');
+    var div = document.createElement('div');
+    div.className = 'norp-notification';
+    var headerIcon = '🛡️';
+    var statusText = t('norp_notif_blocked') || 'BLOCKED';
+    div.innerHTML =
+        '<button class="norp-notif-close" onclick="this.parentElement.remove()">✕</button>' +
+        '<div class="norp-notif-header">' + headerIcon + ' NORP ' + t('norp_notif_header') + '</div>' +
+        '<div class="norp-notif-body">' +
+            '<div><b>' + (t('norp_notif_type') || 'Type') + ':</b> ' + escapeHtml(blockedType) + '</div>' +
+            '<div><b>' + (t('norp_notif_status') || 'Status') + ':</b> <span style="color:#ff8a80;">' + statusText + '</span></div>' +
+            (detail ? '<div style="margin-top:2px;font-size:11px;opacity:0.85;">' + escapeHtml(detail) + '</div>' : '') +
+            (tabName ? '<div style="margin-top:2px;font-size:10px;opacity:0.7;">' + (t('norp_notif_tab') || 'From') + ': ' + escapeHtml(tabName) + '</div>' : '') +
+        '</div>' +
+        '<div class="norp-notif-time">' + timeStr + '</div>';
+    container.appendChild(div);
+
+    // Auto-dismiss after 7 seconds
+    var timer = setTimeout(function() {
+        if (div.parentNode) {
+            div.classList.add('fade-out');
+            setTimeout(function() { if (div.parentNode) div.remove(); }, 300);
+        }
+    }, 7000);
+
+    // Store timer reference so clicking close cancels the auto-dismiss
+    div._dismissTimer = timer;
+    div.querySelector('.norp-notif-close').addEventListener('click', function() {
+        clearTimeout(div._dismissTimer);
+    });
+}
+
+// ── Crash Notification (top-right, red, 20s auto-dismiss) ──
+function showCrashNotification(reason) {
+    _lastCrashReason = reason || 'Unknown error';
+
+    // Remove any existing crash notification first
+    if (_crashNotificationEl && _crashNotificationEl.parentNode) {
+        _crashNotificationEl.remove();
+    }
+    if (_crashRetryTimer) {
+        clearTimeout(_crashRetryTimer);
+        _crashRetryTimer = null;
+    }
+
+    var container = document.getElementById('norp-notification-container');
+    var now = new Date();
+    var timeStr = now.getHours().toString().padStart(2,'0') + ':' +
+                  now.getMinutes().toString().padStart(2,'0') + ':' +
+                  now.getSeconds().toString().padStart(2,'0');
+
+    var div = document.createElement('div');
+    div.className = 'crash-notification';
+
+    // Build reason detail
+    var reasonHtml = '';
+    if (reason) {
+        var shortReason = reason.length > 200 ? reason.substring(0, 200) + '…' : reason;
+        reasonHtml = '<div class="crash-notif-reason">' + escapeHtml(shortReason) + '</div>';
+    }
+
+    div.innerHTML =
+        '<button class="crash-notif-close" title="Dismiss">✕</button>' +
+        '<div class="crash-notif-header">💥 NORP Agent Crashed</div>' +
+        '<div class="crash-notif-body">' +
+            '<div class="crash-notif-status">⚠️ The rendering engine encountered a fatal error</div>' +
+            reasonHtml +
+            '<div class="crash-notif-actions">' +
+                '<button class="crash-notif-retry-btn" title="Try to recover now">🔄 Retry Now</button>' +
+                '<span class="crash-notif-auto-hint">Auto-retrying in 3s…</span>' +
+            '</div>' +
+        '</div>' +
+        '<div class="crash-notif-time">' + timeStr + '</div>';
+
+    container.appendChild(div);
+    _crashNotificationEl = div;
+
+    // Attach close button
+    div.querySelector('.crash-notif-close').addEventListener('click', function() {
+        dismissCrashNotification();
+    });
+
+    // Attach retry button
+    div.querySelector('.crash-notif-retry-btn').addEventListener('click', function() {
+        // Cancel auto-retry and do it now
+        if (_crashRetryTimer) {
+            clearTimeout(_crashRetryTimer);
+            _crashRetryTimer = null;
+        }
+        _crashRetryCount = 0;
+        var hintEl = div.querySelector('.crash-notif-auto-hint');
+        if (hintEl) hintEl.textContent = 'Retrying now…';
+        var btnEl = div.querySelector('.crash-notif-retry-btn');
+        if (btnEl) { btnEl.disabled = true; btnEl.textContent = '⏳ Retrying…'; }
+        _attemptCrashRecovery();
+    });
+
+    // Silent auto-retry after 3 seconds
+    var autoHintEl = div.querySelector('.crash-notif-auto-hint');
+    _crashRetryTimer = setTimeout(function() {
+        _crashRetryTimer = null;
+        if (autoHintEl) autoHintEl.textContent = 'Auto-retrying now…';
+        var btnEl = div.querySelector('.crash-notif-retry-btn');
+        if (btnEl) { btnEl.disabled = true; btnEl.textContent = '⏳ Retrying…'; }
+        _attemptCrashRecovery();
+    }, 3000);
+
+    // Auto-dismiss after 20 seconds (only if not already dismissed)
+    div._autoDismissTimer = setTimeout(function() {
+        if (div.parentNode) {
+            div.classList.add('fade-out');
+            setTimeout(function() { if (div.parentNode) div.remove(); }, 300);
+        }
+    }, 20000);
+
+    // Record to message center
+    addToMessageCenter('crash', 'NORP Agent Crashed', _lastCrashReason, '');
+}
+
+function dismissCrashNotification() {
+    if (_crashRetryTimer) {
+        clearTimeout(_crashRetryTimer);
+        _crashRetryTimer = null;
+    }
+    if (_crashNotificationEl) {
+        if (_crashNotificationEl._autoDismissTimer) {
+            clearTimeout(_crashNotificationEl._autoDismissTimer);
+        }
+        if (_crashNotificationEl.parentNode) {
+            _crashNotificationEl.classList.add('fade-out');
+            var el = _crashNotificationEl;
+            setTimeout(function() { if (el.parentNode) el.remove(); }, 300);
+        }
+        _crashNotificationEl = null;
+    }
+}
+
+function _attemptCrashRecovery() {
+    _crashRetryCount++;
+    var hintEl = _crashNotificationEl ? _crashNotificationEl.querySelector('.crash-notif-auto-hint') : null;
+    var btnEl = _crashNotificationEl ? _crashNotificationEl.querySelector('.crash-notif-retry-btn') : null;
+
+    try {
+        // Step 1: Save tab state to localStorage
+        try { saveTabsToStorage(); } catch(e) {}
+
+        // Step 2: Stop all polling timers on all tabs
+        for (var i = 0; i < tabs.length; i++) {
+            if (tabs[i].pollingTimer) {
+                clearInterval(tabs[i].pollingTimer);
+                tabs[i].pollingTimer = null;
+            }
+            tabs[i].isStreaming = false;
+            tabs[i].isWaiting = false;
+        }
+        isStreaming = false;
+        isWaiting = false;
+
+        // Step 3: Update UI
+        if (sendBtn) sendBtn.style.display = 'inline-block';
+        if (stopBtn) stopBtn.style.display = 'none';
+        if (statusText) statusText.textContent = t('ready') || 'Ready';
+        updateTabBar();
+
+        // Step 4: Try to re-establish backend connectivity
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.log_frontend_error) {
+            try {
+                window.pywebview.api.log_frontend_error('[CrashRecovery] Attempt #' + _crashRetryCount + ' — reason: ' + _lastCrashReason);
+            } catch(e) {}
+        }
+
+        // Step 5: Attempt to restore tabs if possible
+        if (tabs.length === 0 || !tabs[0].dbId) {
+            // Critical: no tabs exist — need full page reload
+            if (_crashRetryCount < _crashRetryMax) {
+                if (hintEl) hintEl.textContent = 'Critical state — reloading page in 2s…';
+                _crashRetryTimer = setTimeout(function() {
+                    _crashRetryTimer = null;
+                    location.reload();
+                }, 2000);
+                return;
+            }
+        }
+
+        // Step 6: Try to restore tabs from localStorage
+        try {
+            var savedTabs = loadTabsFromStorage();
+            if (savedTabs && savedTabs.length > 0) {
+                // Re-attempt recovery via restoreTabsAfterCrash
+                var firstTab = tabs.length > 0 ? tabs[0] : null;
+                if (firstTab) {
+                    restoreTabsAfterCrash(firstTab).then(function() {
+                        _onRecoverySuccess();
+                    }).catch(function(e) {
+                        _onRecoveryFail(e);
+                    });
+                } else {
+                    _onRecoverySuccess();
+                }
+            } else {
+                _onRecoverySuccess();
+            }
+        } catch(e) {
+            _onRecoveryFail(e);
+        }
+    } catch(e) {
+        _onRecoveryFail(e);
+    }
+}
+
+function _onRecoverySuccess() {
+    _crashRetryCount = 0;
+    dismissCrashNotification();
+    showToast('✅ Agent recovered successfully', 3000);
+    addToMessageCenter('crash', 'NORP Agent Recovered', 'Recovery succeeded after crash', '');
+    userInput.disabled = false;
+    userInput.focus();
+}
+
+function _onRecoveryFail(err) {
+    if (_crashRetryCount < _crashRetryMax) {
+        var delay = _crashRetryCount * 2000;
+        var hintEl = _crashNotificationEl ? _crashNotificationEl.querySelector('.crash-notif-auto-hint') : null;
+        if (hintEl) hintEl.textContent = 'Recovery failed (attempt ' + _crashRetryCount + '/' + _crashRetryMax + ') — retrying in ' + (delay/1000) + 's…';
+        var btnEl = _crashNotificationEl ? _crashNotificationEl.querySelector('.crash-notif-retry-btn') : null;
+        if (btnEl) { btnEl.disabled = false; btnEl.textContent = '🔄 Retry Now'; }
+        _crashRetryTimer = setTimeout(function() {
+            _crashRetryTimer = null;
+            var b = _crashNotificationEl ? _crashNotificationEl.querySelector('.crash-notif-retry-btn') : null;
+            if (b) { b.disabled = true; b.textContent = '⏳ Retrying…'; }
+            _attemptCrashRecovery();
+        }, delay);
+    } else {
+        // Max retries reached — suggest page reload
+        if (_crashNotificationEl) {
+            var body = _crashNotificationEl.querySelector('.crash-notif-body');
+            if (body) {
+                body.innerHTML =
+                    '<div class="crash-notif-status" style="color:#ff8a80;">❌ Recovery failed after ' + _crashRetryMax + ' attempts</div>' +
+                    '<div class="crash-notif-reason">' + escapeHtml(err ? (err.message || String(err)) : 'Unknown error') + '</div>' +
+                    '<div class="crash-notif-actions">' +
+                        '<button class="crash-notif-reload-btn" onclick="location.reload()">🔁 Reload Page</button>' +
+                    '</div>';
+            }
+            // Keep notification visible (don't auto-dismiss)
+            if (_crashNotificationEl._autoDismissTimer) {
+                clearTimeout(_crashNotificationEl._autoDismissTimer);
+            }
+            _crashNotificationEl._autoDismissTimer = setTimeout(function() {
+                if (_crashNotificationEl && _crashNotificationEl.parentNode) {
+                    _crashNotificationEl.classList.add('fade-out');
+                    setTimeout(function() { if (_crashNotificationEl && _crashNotificationEl.parentNode) _crashNotificationEl.remove(); }, 300);
+                }
+            }, 60000); // 60s for final failure state
+        }
+        addToMessageCenter('crash', 'NORP Agent — Recovery Failed', 'All ' + _crashRetryMax + ' recovery attempts failed. Page reload recommended.', '');
+    }
+}
+
+// ── Message Center Functions ──
+function addToMessageCenter(type, title, detail, tabName) {
+    _msgIdCounter++;
+    var now = new Date();
+    var timeStr = now.getHours().toString().padStart(2,'0') + ':' +
+                  now.getMinutes().toString().padStart(2,'0') + ':' +
+                  now.getSeconds().toString().padStart(2,'0');
+    var msg = {
+        id: _msgIdCounter,
+        type: type,  // 'blocked', 'ask', 'plugin'
+        title: title,
+        detail: detail || '',
+        tabName: tabName || '',
+        time: timeStr
+    };
+    messageCenter.unshift(msg);
+    updateMsgBadge();
+    // If message center is open, re-render
+    var mcModal = document.getElementById('message-center-modal');
+    if (mcModal && mcModal.style.display === 'block') {
+        renderMessageCenter();
+    }
+}
+
+function removeMessage(id) {
+    messageCenter = messageCenter.filter(function(m) { return m.id !== id; });
+    updateMsgBadge();
+    renderMessageCenter();
+}
+
+function clearAllMessages() {
+    messageCenter = [];
+    updateMsgBadge();
+    renderMessageCenter();
+}
+
+function updateMsgBadge() {
+    var badge = document.getElementById('msg-center-badge');
+    if (!badge) return;
+    var count = messageCenter.length;
+    if (count > 0) {
+        badge.textContent = count > 99 ? '99+' : count;
+        badge.style.display = 'block';
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+function renderMessageCenter() {
+    var list = document.getElementById('message-center-list');
+    var empty = document.getElementById('message-center-empty');
+    if (messageCenter.length === 0) {
+        list.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+    }
+    empty.style.display = 'none';
+    var html = '';
+    for (var i = 0; i < messageCenter.length; i++) {
+        var m = messageCenter[i];
+        var cssClass = '';
+        var icon = '';
+        if (m.type === 'blocked') { cssClass = 'msg-blocked'; icon = '🛡️❌'; }
+        else if (m.type === 'ask') { cssClass = 'msg-ask'; icon = '🤖'; }
+        else if (m.type === 'plugin') { cssClass = 'msg-plugin'; icon = '⚠️'; }
+        else if (m.type === 'crash') { cssClass = 'msg-crash'; icon = '💥'; }
+        html += '<div class="msg-item ' + cssClass + '">' +
+            '<button class="msg-close" onclick="removeMessage(' + m.id + ')" title="' + (t('msg_delete') || 'Delete') + '">✕</button>' +
+            '<div class="msg-title">' + icon + ' ' + escapeHtml(m.title) + '</div>' +
+            (m.detail ? '<div class="msg-detail">' + escapeHtml(m.detail) + '</div>' : '') +
+            '<div class="msg-tab">' + (t('norp_notif_tab') || 'From') + ': ' + escapeHtml(m.tabName || '—') + '</div>' +
+            '<div class="msg-time">' + m.time + '</div>' +
+        '</div>';
+    }
+    list.innerHTML = html;
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
 function showToast(msg, duration) {
     duration = duration || 2000;
@@ -3697,8 +5328,18 @@ document.addEventListener('click', function(e) {
     var copyBtn = e.target.closest('.copy-btn');
     if (copyBtn) {
         e.preventDefault(); e.stopPropagation();
-        var code = copyBtn.dataset.code;
-        if (code) fallbackCopy(decodeURIComponent(code));
+        // Read code directly from the <code> element so copying works
+        // as soon as the code block is closed, even if the rest of the
+        // reply is still streaming.
+        var wrapper = copyBtn.closest('.code-block-wrapper');
+        var codeEl = wrapper ? wrapper.querySelector('pre code') : null;
+        var code = codeEl ? codeEl.textContent : '';
+        if (!code) {
+            // Fallback to data-code for backward compatibility
+            code = copyBtn.dataset.code || '';
+            if (code) code = decodeURIComponent(code);
+        }
+        if (code) fallbackCopy(code);
         return;
     }
 
@@ -4130,7 +5771,12 @@ function handleEvent(event, tab) {
         if (!currentReplyEl) {
             finalizeCurrentThinking();
         }
-        appendOrAccumulateReply(event.slice(2));
+        var replyText = event.slice(2);
+        appendOrAccumulateReply(replyText);
+        // NORP Safety Block Detection (from command return string)
+        if (replyText.indexOf('NORP安全系统拦截') !== -1 || replyText.indexOf('NORP safety') !== -1) {
+            _handleNorpBlock(replyText, tab);
+        }
     } else if (event.indexOf('C:') === 0) {
         flushAccumulated();
         appendOrAccumulateCommand(event.slice(2));
@@ -4141,7 +5787,12 @@ function handleEvent(event, tab) {
         } catch(e) {}
     } else if (event.indexOf('E:') === 0) {
         flushAccumulated();
-        appendError(event.slice(2));
+        var errMsg = event.slice(2);
+        appendError(errMsg);
+        // NORP Safety Block Detection (from ValueError)
+        if (errMsg.indexOf('NORP安全系统拦截') !== -1 || errMsg.indexOf('NORP safety') !== -1) {
+            _handleNorpBlock(errMsg, tab);
+        }
     } else if (event.indexOf('F:') === 0) {
         // Backend requests explicit flush of current thinking block
         finalizeCurrentThinking();
@@ -4173,6 +5824,9 @@ function handleEvent(event, tab) {
         }
         appendAskUser(question);
         var qSessionId = tab ? tab.dbId : (getActiveTab() ? getActiveTab().dbId : '');
+        // Record to message center
+        var tabName = tab ? tab.title : (getActiveTab() ? getActiveTab().title : '');
+        addToMessageCenter('ask', 'Agent Question', typeof question === 'string' ? question.substring(0, 120) : '', tabName);
         // Only show modal if this is the active tab; otherwise defer until user switches
         if (tab && tab.uiId === activeTabId) {
             showAskUserModal(question, qSessionId);
@@ -4210,6 +5864,39 @@ function handleEvent(event, tab) {
         }
         scrollChatToBottom();
     }
+}
+
+// ── NORP Safety Block Detection ──
+function _handleNorpBlock(rawMsg, tab) {
+    // Parse blocked type from message: "NORP安全系统拦截: {reason}（威胁等级: {level}）"
+    var blockedType = 'unknown';
+    var detail = rawMsg;
+
+    // Try to extract the tool/command type
+    var reasonMatch = rawMsg.match(/NORP安全系统拦截:\s*(.+?)（威胁等级/);
+    if (reasonMatch) {
+        detail = reasonMatch[1].trim();
+    } else {
+        reasonMatch = rawMsg.match(/NORP安全系统拦截:\s*(.+)/);
+        if (reasonMatch) detail = reasonMatch[1].trim();
+    }
+
+    // Determine blocked type from the reason
+    if (rawMsg.indexOf('危险命令') !== -1 || rawMsg.indexOf('dangerous') !== -1) {
+        blockedType = 'exec_cmd (危险命令)';
+    } else if (rawMsg.indexOf('UAC') !== -1 || rawMsg.indexOf('提权') !== -1) {
+        blockedType = 'exec_cmd (UAC提权)';
+    } else if (rawMsg.indexOf('路径越界') !== -1 || rawMsg.indexOf('path traversal') !== -1) {
+        blockedType = 'path (路径越界)';
+    } else if (rawMsg.indexOf('路径') !== -1) {
+        blockedType = 'path';
+    } else if (rawMsg.indexOf('命令') !== -1 || rawMsg.indexOf('command') !== -1) {
+        blockedType = 'exec_cmd';
+    }
+
+    var tabName = tab ? tab.title : (getActiveTab() ? getActiveTab().title : '');
+    showNorpNotification(blockedType, detail, tabName);
+    addToMessageCenter('blocked', blockedType, detail, tabName);
 }
 
 // ── Per-tab event handler: swaps globals so background tabs can render ──
@@ -4597,6 +6284,7 @@ async function handleSend() {
     tab.selectedFiles = [];
     updateFileBadges();
     userInput.value = '';
+    tab.inputValue = '';
     resetTextareaHeight();
 
     isWaiting = true;
@@ -4752,6 +6440,9 @@ async function fetchModels(baseUrl) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  UI — Modals, settings, plugins, NORP, message center
+// ═══════════════════════════════════════════════════════════════
 async function openSettings() {
     try { config = await window.pywebview.api.get_config(); } catch(e) { config = {}; }
 
@@ -4773,8 +6464,11 @@ async function openSettings() {
         updateQueueWarning();
     });
 
+    // ── 关闭按钮默认行为 ──
+    document.getElementById('cfg-close-behavior').value = config.close_button_behavior || 'minimize_to_tray';
+
     document.getElementById('cfg-api-base').value = config.api_base || 'https://api.deepseek.com';
-    document.getElementById('cfg-use-responses').checked = config.use_responses_api !== false;
+    document.getElementById('cfg-use-responses').checked = config.use_responses_api === true;
     document.getElementById('cfg-project-root').value = config.project_root || '';
     document.getElementById('cfg-queue-size').value = config.queue_max_size || 200;
     document.getElementById('cfg-max-steps').value = config.max_steps || 128;
@@ -4802,10 +6496,20 @@ async function openSettings() {
 
     // Security fields
     document.getElementById('cfg-security-audit').value = config.plugin_security_audit || 'warn';
+    _prevSecurityAudit = document.getElementById("cfg-security-audit").value;
     document.getElementById('cfg-security-import-restrict').value = config.plugin_security_import_restrict || 'off';
     document.getElementById('cfg-security-permissions').checked = config.plugin_security_require_permissions || false;
     document.getElementById('cfg-security-resource-limit').checked = config.plugin_security_resource_limit || false;
     renderSecurityAuditSummary();
+
+    // NORP safety system
+    document.getElementById('cfg-norp-safe-enabled').checked = config.norp_safe_enabled !== false;
+    updateNorpSafetyStatus();
+
+    // Jailbreak guard
+    document.getElementById('cfg-jailbreak-guard-enabled').checked = config.jailbreak_guard_enabled !== false;
+    document.getElementById('cfg-jailbreak-guard-action').value = config.jailbreak_guard_action || 'block';
+    updateJailbreakGuardStatus();
 
     // Custom system prompt
     document.getElementById('cfg-custom-prompt-enabled').checked = config.custom_system_prompt_enabled || false;
@@ -4817,6 +6521,7 @@ async function openSettings() {
 
     updateQueueWarning();
     setLanguage(currentLang);
+    refreshRuntimeHealth();
     settingsModal.style.display = 'block';
     fetchModels(config.api_base || 'https://api.deepseek.com');
 }
@@ -4940,6 +6645,7 @@ async function saveSettings() {
     }
     var newConfig = {
         language: document.getElementById('cfg-language').value,
+        close_button_behavior: document.getElementById('cfg-close-behavior').value,
         model: modelVal.trim(),
         api_base: document.getElementById('cfg-api-base').value.trim(),
         use_responses_api: document.getElementById('cfg-use-responses').checked,
@@ -4964,6 +6670,9 @@ async function saveSettings() {
         custom_system_prompt_enabled: document.getElementById('cfg-custom-prompt-enabled').checked,
         custom_system_prompt: document.getElementById('cfg-custom-prompt').value,
         custom_system_prompt_file: document.getElementById('cfg-custom-prompt-file').value,
+        norp_safe_enabled: document.getElementById('cfg-norp-safe-enabled').checked,
+        jailbreak_guard_enabled: document.getElementById('cfg-jailbreak-guard-enabled').checked,
+        jailbreak_guard_action: document.getElementById('cfg-jailbreak-guard-action').value,
     };
 
     try {
@@ -4995,8 +6704,9 @@ async function restoreDefaults() {
         document.getElementById('cfg-language').value = config.language || 'zh_CN';
         currentLang = config.language || 'zh_CN';
         setLanguage(currentLang);
+        document.getElementById('cfg-close-behavior').value = config.close_button_behavior || 'minimize_to_tray';
         document.getElementById('cfg-api-base').value = config.api_base || 'https://api.deepseek.com';
-        document.getElementById('cfg-use-responses').checked = config.use_responses_api !== false;
+        document.getElementById('cfg-use-responses').checked = config.use_responses_api === true;
         document.getElementById('cfg-project-root').value = config.project_root || '';
         document.getElementById('cfg-queue-size').value = config.queue_max_size || 200;
         document.getElementById('cfg-max-steps').value = config.max_steps || 128;
@@ -5022,6 +6732,15 @@ async function restoreDefaults() {
         document.getElementById('cfg-security-permissions').checked = config.plugin_security_require_permissions || false;
         document.getElementById('cfg-security-resource-limit').checked = config.plugin_security_resource_limit || false;
         renderSecurityAuditSummary();
+
+        // NORP safety system reset
+        document.getElementById('cfg-norp-safe-enabled').checked = true;
+        updateNorpSafetyStatus();
+
+        // Jailbreak guard reset
+        document.getElementById('cfg-jailbreak-guard-enabled').checked = true;
+        document.getElementById('cfg-jailbreak-guard-action').value = 'block';
+        updateJailbreakGuardStatus();
 
         // Custom system prompt reset
         document.getElementById('cfg-custom-prompt-enabled').checked = false;
@@ -5135,6 +6854,19 @@ async function renderSecurityAuditSummary() {
         if (blockedPlugins.length > 0) {
             html += '<br><span style="color:#dc3545;">' + t('audit_blocked') + ': ' + blockedPlugins.join(', ') + '</span>';
             html += '<br><span style="font-size:10px;color:#888;">' + t('audit_blocked_hint') + '</span>';
+            // Add to message center (deduplicated by plugin name)
+            for (var b = 0; b < blockedPlugins.length; b++) {
+                var alreadyExists = false;
+                for (var m = 0; m < messageCenter.length; m++) {
+                    if (messageCenter[m].type === 'plugin' && messageCenter[m].detail.indexOf(blockedPlugins[b]) !== -1) {
+                        alreadyExists = true;
+                        break;
+                    }
+                }
+                if (!alreadyExists) {
+                    addToMessageCenter('plugin', t('audit_blocked'), blockedPlugins[b], 'Plugins');
+                }
+            }
         }
         el.innerHTML = html;
     } catch(e) {
@@ -5142,7 +6874,240 @@ async function renderSecurityAuditSummary() {
     }
 }
 
+// ── NORP 安全系统 UI ──
+
+function updateNorpSafetyStatus() {
+    var checkbox = document.getElementById('cfg-norp-safe-enabled');
+    var statusEl = document.getElementById('norp-safety-status');
+
+    if (!checkbox || !statusEl) return;
+
+    if (checkbox.checked) {
+        statusEl.style.background = '#e8f5e9';
+        statusEl.style.color = '#2e7d32';
+        statusEl.setAttribute('data-i18n', 'norp_safety_enabled_status');
+        statusEl.textContent = t('norp_safety_enabled_status');
+    } else {
+        statusEl.style.background = '#fff3e0';
+        statusEl.style.color = '#e65100';
+        statusEl.setAttribute('data-i18n', 'norp_safety_disabled_status');
+        statusEl.textContent = t('norp_safety_disabled_status');
+    }
+    // Also update the top warning bar
+    updateNorpSafetyWarningBar();
+}
+
+// ── 顶部 NORP 安全警告条 ──
+function updateNorpSafetyWarningBar() {
+    var bar = document.getElementById('norp-safety-warning-bar');
+    if (!bar) return;
+    // Always sync i18n text before showing, in case language was switched
+    var key = bar.getAttribute('data-i18n');
+    if (key) {
+        var val = t(key, currentLang);
+        if (/<[a-zA-Z][^>]*>/.test(val)) {
+            bar.innerHTML = val;
+        } else {
+            bar.textContent = val;
+        }
+    }
+    var checkbox = document.getElementById('cfg-norp-safe-enabled');
+    if (checkbox) {
+        // 优先使用 checkbox 当前状态（反映用户最新操作）
+        bar.style.display = checkbox.checked ? 'none' : 'block';
+        return;
+    }
+    // fallback: 从 config 读取
+    bar.style.display = (config.norp_safe_enabled !== false) ? 'none' : 'block';
+}
+
+// NORP safety toggle: custom warning modal (like security-off-warning-modal)
+document.addEventListener('DOMContentLoaded', function() {
+    var checkbox = document.getElementById('cfg-norp-safe-enabled');
+    if (checkbox) {
+        checkbox.addEventListener('change', function() {
+            if (!this.checked) {
+                // Show custom warning modal instead of confirm()
+                this.checked = true; // revert for now
+                norpSafetyOffWarningModal.style.display = 'block';
+            } else {
+                config.norp_safe_enabled = true;
+                updateNorpSafetyStatus();
+                updateNorpSafetyWarningBar();
+                try {
+                    window.pywebview.api.set_norp_safe_enabled(true);
+                } catch(e) {}
+            }
+        });
+    }
+});
+
+// NORP safety off modal buttons
+document.addEventListener('DOMContentLoaded', function() {
+    var confirmBtn = document.getElementById('norp-safety-off-confirm-btn');
+    var cancelBtn = document.getElementById('norp-safety-off-cancel-btn');
+    if (confirmBtn) {
+        confirmBtn.addEventListener('click', function() {
+            var cb = document.getElementById('cfg-norp-safe-enabled');
+            if (cb) cb.checked = false;
+            config.norp_safe_enabled = false;
+            norpSafetyOffWarningModal.style.display = 'none';
+            updateNorpSafetyStatus();
+            updateNorpSafetyWarningBar();
+            try {
+                window.pywebview.api.set_norp_safe_enabled(false);
+            } catch(e) {}
+        });
+    }
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', function() {
+            norpSafetyOffWarningModal.style.display = 'none';
+            // Checkbox was already reverted to checked in the change handler
+        });
+    }
+});
+
+// ── 越狱防护状态更新 ──
+function updateJailbreakGuardStatus() {
+    var statusEl = document.getElementById('jailbreak-guard-status');
+    var actionEl = document.getElementById('cfg-jailbreak-guard-action');
+    var enabled = document.getElementById('cfg-jailbreak-guard-enabled').checked;
+    if (!statusEl) return;
+    if (enabled) {
+        statusEl.style.background = '#e8f5e9';
+        statusEl.style.color = '#2e7d32';
+        statusEl.setAttribute('data-i18n', 'jailbreak_guard_enabled_status');
+        statusEl.textContent = t('jailbreak_guard_enabled_status');
+        if (actionEl) actionEl.disabled = false;
+    } else {
+        statusEl.style.background = '#fff3e0';
+        statusEl.style.color = '#e65100';
+        statusEl.setAttribute('data-i18n', 'jailbreak_guard_disabled_status');
+        statusEl.textContent = t('jailbreak_guard_disabled_status');
+        if (actionEl) actionEl.disabled = true;
+    }
+}
+
+// Jailbreak guard toggle
+document.addEventListener('DOMContentLoaded', function() {
+    var checkbox = document.getElementById('cfg-jailbreak-guard-enabled');
+    if (checkbox) {
+        checkbox.addEventListener('change', function() {
+            updateJailbreakGuardStatus();
+        });
+    }
+});
+
 async function addPluginDir() {
+    try {
+        var path = prompt('请输入插件目录路径:');
+        if (!path) return;
+        await window.pywebview.api.add_plugin_dir(path);
+        renderPluginDirs();
+    } catch(e) {
+        showToast('添加插件目录失败: ' + e.message);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  运行时健康检查
+// ═══════════════════════════════════════════════════════════════
+
+async function refreshRuntimeHealth() {
+    var statusEl = document.getElementById('runtime-health-status');
+    var textEl = document.getElementById('runtime-health-text');
+    var detailEl = document.getElementById('runtime-health-detail');
+
+    if (!statusEl || !textEl) return;
+
+    try {
+        var health = await window.pywebview.api.get_runtime_health();
+        if (!health) {
+            textEl.textContent = t('runtime_health_no_data');
+            statusEl.style.background = '#f0f0f0';
+            return;
+        }
+
+        var overallHealthy = health.overall_healthy;
+        var fatalCount = health.fatal_count || 0;
+        var errorCount = health.error_count || 0;
+        var warningCount = health.warning_count || 0;
+        var envType = health.environment_type || 'unknown';
+
+        // ── 状态栏 ──
+        var icon, bgColor, statusText;
+        if (fatalCount > 0) {
+            icon = '🔴';
+            bgColor = '#fce4e4';
+            statusText = t('runtime_health_fatal', null).replace('{count}', fatalCount);
+        } else if (errorCount > 0) {
+            icon = '🟠';
+            bgColor = '#fff3e0';
+            statusText = t('runtime_health_error', null).replace('{count}', errorCount);
+        } else if (warningCount > 0) {
+            icon = '🟡';
+            bgColor = '#fffde7';
+            statusText = t('runtime_health_warning', null).replace('{count}', warningCount);
+        } else {
+            icon = '✅';
+            bgColor = '#e8f5e9';
+            statusText = t('runtime_health_ok');
+        }
+
+        // 附加环境类型
+        var envLabels = {
+            'windows_sandbox': t('runtime_env_sandbox'),
+            'docker': t('runtime_env_docker'),
+            'vm': t('runtime_env_vm'),
+            'wine': t('runtime_env_wine'),
+            'normal': '',
+            'unknown': ''
+        };
+        statusText += (envLabels[envType] || '');
+
+        statusEl.style.background = bgColor;
+        statusEl.querySelector('span').textContent = icon;
+        textEl.textContent = statusText;
+
+        // ── 详细信息 ──
+        var checks = health.checks || [];
+        var detailHtml = '';
+        for (var i = 0; i < checks.length; i++) {
+            var c = checks[i];
+            var sevIcon = {fatal: '🔴', error: '🟠', warning: '🟡', info: 'ℹ️'}[c.severity] || '•';
+            var passedIcon = c.passed ? '✓' : '✗';
+            var color = c.passed ? '#2e7d32' : (c.severity === 'fatal' ? '#c62828' : c.severity === 'error' ? '#e65100' : '#f57f17');
+            detailHtml += '<div style="color:' + color + ';margin-bottom:4px;">';
+            detailHtml += sevIcon + ' <b>' + escHtml(c.name) + '</b> ' + passedIcon;
+            detailHtml += '<br><span style="color:#666;">' + escHtml(c.message) + '</span>';
+            if (c.detail) {
+                detailHtml += '<br><span style="color:#888;font-size:10px;">' + escHtml(c.detail).replace(/\n/g, '<br>') + '</span>';
+            }
+            if (c.suggestion) {
+                detailHtml += '<br><span style="color:#1565c0;font-size:10px;">💡 ' + escHtml(c.suggestion) + '</span>';
+            }
+            detailHtml += '</div>';
+        }
+        detailEl.innerHTML = detailHtml;
+
+        // 根据 toggle 按钮状态决定是否展开详情
+        var toggleBtn = document.getElementById('runtime-health-toggle');
+        if (toggleBtn && toggleBtn.textContent === '▼') {
+            detailEl.style.display = 'block';
+        }
+
+    } catch(e) {
+        textEl.textContent = t('runtime_health_failed').replace('{error}', e.message);
+        statusEl.style.background = '#f0f0f0';
+    }
+}
+
+function escHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+async function browsePluginDir() {
     try {
         var path = await window.pywebview.api.pick_plugin_dir();
         if (!path) return;
@@ -5233,6 +7198,59 @@ stopBtn.addEventListener('click', handleStop);
 document.getElementById('key-btn').addEventListener('click', showApiKeyModal);
 document.getElementById('settings-btn').addEventListener('click', openSettings);
 document.getElementById('settings-save-btn').addEventListener('click', saveSettings);
+document.getElementById('runtime-health-refresh').addEventListener('click', refreshRuntimeHealth);
+document.getElementById('runtime-health-toggle').addEventListener('click', function() {
+    var detailEl = document.getElementById('runtime-health-detail');
+    var isHidden = detailEl.style.display === 'none' || !detailEl.style.display;
+    if (isHidden) {
+        detailEl.style.display = 'block';
+        this.textContent = '▼';
+        this.title = t('runtime_health_toggle_collapse');
+    } else {
+        detailEl.style.display = 'none';
+        this.textContent = '▶';
+        this.title = t('runtime_health_toggle_expand');
+    }
+});
+
+// ── Message Center ──
+document.getElementById('msg-center-btn').addEventListener('click', function() {
+    var modal = document.getElementById('message-center-modal');
+    if (modal.style.display === 'block') {
+        modal.style.display = 'none';
+    } else {
+        renderMessageCenter();
+        modal.style.display = 'block';
+        updateMsgBadge();
+    }
+});
+document.getElementById('msg-center-close').addEventListener('click', function() {
+    document.getElementById('message-center-modal').style.display = 'none';
+});
+document.getElementById('msg-center-clear-all').addEventListener('click', function() {
+    clearAllMessages();
+});
+
+// Security audit off warning
+
+var _prevSecurityAudit = document.getElementById("cfg-security-audit").value;
+document.getElementById("cfg-security-audit").addEventListener("change", function() {
+    var newVal = this.value;
+    if (newVal === "off" && _prevSecurityAudit !== "off") {
+        securityOffWarningModal.style.display = "block";
+        this.value = _prevSecurityAudit;
+    } else {
+        _prevSecurityAudit = newVal;
+    }
+});
+document.getElementById("security-off-confirm-btn").addEventListener("click", function() {
+    document.getElementById("cfg-security-audit").value = "off";
+    _prevSecurityAudit = "off";
+    securityOffWarningModal.style.display = "none";
+});
+document.getElementById("security-off-cancel-btn").addEventListener("click", function() {
+    securityOffWarningModal.style.display = "none";
+});
 document.getElementById('settings-cancel').addEventListener('click', function() { settingsModal.style.display = 'none'; });
 document.getElementById('settings-restore-defaults').addEventListener('click', restoreDefaults);
 
@@ -5324,6 +7342,9 @@ setTimeout(function() {
     }
 }, 1000);
 
+// ═══════════════════════════════════════════════════════════════
+//  WIZARD — Onboarding wizard
+// ═══════════════════════════════════════════════════════════════
 var wizParticlesRunning = false;
 var wizParticlesAnimId = null;
 
@@ -5763,15 +7784,46 @@ function bindWizardEvents() {
     });
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  MAIN — Entry point & initialization
+// ═══════════════════════════════════════════════════════════════
 window.addEventListener('pywebviewready', async function() {
+    // ── Step 1: 等待后端初始化（loading_ready 做所有耗时操作）──
+    var initResult;
     try {
+        initResult = await window.pywebview.api.loading_ready();
+    } catch(e) {
+        showLoadingError('启动失败', 1, '无法连接到后端进程。\n\n' + (e.message || e.toString()));
+        return;
+    }
+
+    if (initResult && initResult.status === 'error') {
+        showLoadingError(initResult.title, initResult.fatal_count, initResult.details);
+        return;  // 停止，不继续初始化
+    }
+
+    // ── Step 2: 后端就绪，正常初始化前端 ──
+    // dismiss_splash 已在 loading_ready 中调用，这里兜底
+    try { await window.pywebview.api.dismiss_splash(); } catch(e) {}
+
+    try {
+        updateLoadingProgress("正在加载配置...");
         config = await window.pywebview.api.get_config();
         // Apply saved language
         currentLang = config.language || 'zh_CN';
         setLanguage(currentLang);
 
+        // Sync NORP checkbox with config before checking warning bar visibility
+        var norpCb = document.getElementById('cfg-norp-safe-enabled');
+        if (norpCb) {
+            norpCb.checked = config.norp_safe_enabled !== false;
+        }
+        // Show NORP safety warning bar if safety is disabled
+        updateNorpSafetyWarningBar();
+
         // ── Initialize first tab ──
         // Create backend session and set up the frontend tab
+        updateLoadingProgress("正在创建会话...");
         var firstSessionId = await window.pywebview.api.create_session(config.project_root || '');
         var firstTab = createTab(firstSessionId, 'Tab 1', true, true, config.project_root || '');
         // Make default panels visible
@@ -5791,6 +7843,7 @@ window.addEventListener('pywebviewready', async function() {
             if (!hasKey) {
                 setTimeout(function() { showApiKeyModal(); }, 300);
             }
+            updateLoadingProgress("正在加载历史记录...");
             await loadHistory();
             userInput.disabled = false;
             userInput.focus();
@@ -5838,12 +7891,99 @@ window.addEventListener('pywebviewready', async function() {
             // Silently ignore — token display is non-critical
         }
 
+        // ── ★ Restore tabs after crash/refresh ──
+        try {
+            await restoreTabsAfterCrash(firstTab);
+        } catch(e) {
+            console.warn('Tab restoration failed:', e);
+        }
+
+        // ── Hide loading overlay ──
+        updateLoadingProgress(t('ready'), true);
+        setTimeout(function() {
+            dismissLoadingOverlay();
+        }, 700);
+
     } catch(e) {
         config = {};
         userInput.disabled = false;
         userInput.focus();
+        // ── Hide loading overlay even on error ──
+        dismissLoadingOverlay();
     }
 });
+
+function dismissLoadingOverlay() {
+    var overlay = document.getElementById('loading-overlay');
+    if (!overlay) return;
+    overlay.classList.add('fade-out');
+    setTimeout(function() {
+        overlay.style.display = 'none';
+    }, 350);
+}
+
+function showLoadingError(title, fatalCount, details) {
+    var overlay = document.getElementById('loading-overlay');
+    if (!overlay) return;
+    overlay.classList.add('error');
+    var statusText = document.getElementById('loadingStatusText');
+    if (statusText) statusText.textContent = title || t('loading_failed');
+    var badge = document.getElementById('loadingFatalBadge');
+    if (badge) {
+        badge.textContent = tf('loading_fatal_issues', currentLang, fatalCount);
+    }
+    var errorDetails = document.getElementById('loadingErrorDetails');
+    if (errorDetails) {
+        errorDetails.textContent = details;
+    }
+    // Wire exit button
+    var exitBtn = document.getElementById('loadingExitBtn');
+    if (exitBtn) {
+        exitBtn.textContent = t('loading_exit');
+        exitBtn.onclick = function(e) {
+            e.stopPropagation();
+            try {
+                window.pywebview.api.quit_app();
+            } catch(_) {
+                window.close();
+            }
+        };
+    }
+}
+
+var _loadingQueue = [];
+var _loadingTimer = null;
+
+function updateLoadingProgress(msg, done) {
+    _loadingQueue.push({msg: msg, done: done});
+    if (!_loadingTimer) {
+        processLoadingQueue();
+    }
+}
+
+function processLoadingQueue() {
+    if (_loadingQueue.length === 0) {
+        _loadingTimer = null;
+        return;
+    }
+    var item = _loadingQueue.shift();
+    var el = document.getElementById('loadingProgress');
+    if (el) {
+        var div = document.createElement('div');
+        div.className = 'loading-progress-item' + (item.done ? ' done' : '');
+        div.textContent = (item.done ? '✓ ' : '→ ') + item.msg;
+        el.appendChild(div);
+        el.scrollTop = el.scrollHeight;
+        if (item.done) {
+            // Replace spinner with green checkmark + "一切就绪"
+            var overlay = document.getElementById('loading-overlay');
+            if (overlay) overlay.classList.add('done');
+            var statusText = document.getElementById('loadingStatusText');
+            if (statusText) statusText.textContent = t('loading_all_ready');
+        }
+    }
+    _loadingTimer = setTimeout(processLoadingQueue, 300);
+}
 
 async function createNewTab() {
     if (tabs.length >= MAX_TABS) {
@@ -5863,8 +8003,16 @@ async function createNewTab() {
         sid = 'session_' + Date.now();
     }
     var idx = tabs.length + 1;
+    var baseTitle = 'Tab ' + idx;
+    // Ensure unique tab name
+    var title = baseTitle;
+    var counter = 1;
+    while (isTabNameDuplicate(title, null)) {
+        counter++;
+        title = baseTitle + ' (' + counter + ')';
+    }
     var defaultWs = config.project_root || '';
-    createTab(sid, 'Tab ' + idx, true, false, defaultWs);
+    createTab(sid, title, true, false, defaultWs);
     // Reset for new tab
     updateFileBadges();
     tokenDisplay.innerHTML = '';
@@ -5894,10 +8042,126 @@ function switchToPrevTab() {
 }
 
 window.onerror = function(message, source, lineno, colno, error) {
+    // ★ Save tab state before the error potentially crashes the page
+    try { saveTabsToStorage(); } catch(e) {}
     var msg = 'JS Error: ' + message + ' at ' + source + ':' + lineno + ':' + colno;
     try { window.pywebview.api.log_frontend_error(msg); } catch(e) {}
+
+    // Detect OOM / crash-level errors
+    var isOOM = false;
+    var reason = message || '';
+    if (typeof message === 'string') {
+        var lower = message.toLowerCase();
+        if (lower.indexOf('out of memory') !== -1 ||
+            lower.indexOf('memory') !== -1 ||
+            lower.indexOf('allocation failed') !== -1 ||
+            lower.indexOf('heap') !== -1 ||
+            lower.indexOf('stack overflow') !== -1 ||
+            lower.indexOf('cannot allocate') !== -1 ||
+            lower.indexOf('insufficient memory') !== -1 ||
+            lower.indexOf('webview2') !== -1 ||
+            lower.indexOf('renderer') !== -1 ||
+            lower.indexOf('crash') !== -1) {
+            isOOM = true;
+        }
+    }
+    // Also treat RangeError (often from huge allocations) as OOM
+    if (error && error instanceof RangeError) {
+        isOOM = true;
+    }
+
+    if (isOOM) {
+        // Disable input while recovering
+        userInput.disabled = true;
+        // Show crash notification
+        try { showCrashNotification(reason || 'JavaScript heap limit exceeded — possible OOM'); } catch(e) {}
+    }
     return true;
 };
+
+// ── Unhandled Promise Rejection — catch OOM from async operations ──
+window.addEventListener('unhandledrejection', function(event) {
+    var reason = event.reason;
+    var reasonStr = '';
+    try {
+        if (reason instanceof Error) {
+            reasonStr = reason.message || reason.toString();
+        } else if (typeof reason === 'string') {
+            reasonStr = reason;
+        } else {
+            reasonStr = JSON.stringify(reason);
+        }
+    } catch(e) {
+        reasonStr = String(reason);
+    }
+
+    // Log to backend
+    try {
+        window.pywebview.api.log_frontend_error('[UnhandledRejection] ' + reasonStr);
+    } catch(e) {}
+
+    // Detect OOM patterns
+    var lower = reasonStr.toLowerCase();
+    if (lower.indexOf('out of memory') !== -1 ||
+        lower.indexOf('memory') !== -1 ||
+        lower.indexOf('heap') !== -1 ||
+        lower.indexOf('allocation') !== -1 ||
+        lower.indexOf('quota exceeded') !== -1) {
+        try { saveTabsToStorage(); } catch(e) {}
+        userInput.disabled = true;
+        try { showCrashNotification(reasonStr || 'Unhandled async rejection — likely memory exhaustion'); } catch(e) {}
+    }
+});
+
+// ── Memory pressure monitoring (WebView2 Chromium) ──
+(function initMemoryMonitor() {
+    // Only works in Chromium-based WebView2
+    if (!window.performance || !performance.memory) return;
+
+    var CHECK_INTERVAL = 15000; // every 15s
+    var WARN_RATIO = 0.85;      // 85% of heap limit → warn
+    var CRITICAL_RATIO = 0.95;  // 95% → crash notification
+
+    setInterval(function() {
+        try {
+            var mem = performance.memory;
+            var used = mem.usedJSHeapSize;
+            var limit = mem.jsHeapSizeLimit;
+            var total = mem.totalJSHeapSize;
+
+            if (limit <= 0) return; // not available
+
+            var ratio = used / limit;
+
+            if (ratio >= CRITICAL_RATIO) {
+                // Critical — trigger crash notification
+                var mbUsed = (used / 1048576).toFixed(1);
+                var mbLimit = (limit / 1048576).toFixed(1);
+                try { saveTabsToStorage(); } catch(e) {}
+                userInput.disabled = true;
+                try {
+                    showCrashNotification(
+                        'JS heap at ' + (ratio * 100).toFixed(0) + '% (' +
+                        mbUsed + ' MB / ' + mbLimit + ' MB limit). ' +
+                        'Imminent OOM crash detected.'
+                    );
+                } catch(e) {}
+            } else if (ratio >= WARN_RATIO) {
+                // Warning — log but don't show crash notification yet
+                var mbUsedW = (used / 1048576).toFixed(1);
+                var mbLimitW = (limit / 1048576).toFixed(1);
+                try {
+                    window.pywebview.api.log_frontend_error(
+                        '[MemoryWarn] Heap at ' + (ratio * 100).toFixed(0) + '% — ' +
+                        mbUsedW + ' MB / ' + mbLimitW + ' MB'
+                    );
+                } catch(e) {}
+            }
+        } catch(e) {
+            // performance.memory might throw in some contexts
+        }
+    }, CHECK_INTERVAL);
+})();
 </script>
 </body>
 </html>

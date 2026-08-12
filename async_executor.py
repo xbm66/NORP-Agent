@@ -22,6 +22,11 @@ from permission_cascade import (
 )
 from lifecycle_manager import LifecycleManager, get_lifecycle_manager
 from resource_isolator import ResourceIsolator, ResourceLimits, get_resource_isolator
+from norp_safe import NorpSafe, get_norp_safe, ThreatLevel
+from workspace_index import WorkspaceIndex, get_workspace_index, search_large_file_stream, scan_and_index, _fmt_size as _wi_fmt_size
+from file_surgery import perform_surgery, perform_scan
+from web_fetcher_native import handle_web_fetch, handle_web_extract_links
+from context_index import FTS5Retriever, get_context_index, chunk_text
 
 
 class AsyncToolExecutor:
@@ -48,6 +53,7 @@ class AsyncToolExecutor:
         lifecycle_manager: Optional[LifecycleManager] = None,
         resource_isolator: Optional[ResourceIsolator] = None,
         allow_full_read_large_files: bool = False,
+        norp_safe: Optional[NorpSafe] = None,
     ):
         self.project_root = os.path.abspath(project_root)
         self.app_dir = app_dir
@@ -61,6 +67,8 @@ class AsyncToolExecutor:
         self.permission_cascade = permission_cascade or get_permission_cascade()
         self.lifecycle_manager = lifecycle_manager or get_lifecycle_manager()
         self.resource_isolator = resource_isolator or get_resource_isolator()
+        # NORP 安全系统
+        self.norp_safe = norp_safe or get_norp_safe(app_dir)
 
         # 当前占用的沙箱
         self._sandbox: Optional[Sandbox] = None
@@ -110,6 +118,9 @@ class AsyncToolExecutor:
 
     # ── 工具执行入口 ──
 
+    # 内置工具执行超时（秒），防止任何工具永久挂起
+    BUILTIN_TOOL_TIMEOUT = 300.0
+
     async def execute(self, tool_name: str, args: dict) -> str:
         """异步执行工具。"""
         # 权限检查
@@ -135,6 +146,23 @@ class AsyncToolExecutor:
             "open_file": self._open_file,
             "read_clipboard": self._read_clipboard,
             "write_clipboard": self._write_clipboard,
+            "unpack_archive": self._unpack_archive,
+            "copy_file": self._copy_file,
+            "move_file": self._move_file,
+            "index_workspace": self._index_workspace,
+            "search_files": self._search_files_native,
+            "find_files": self._find_files_native,
+            "search_large_file": self._search_large_file,
+            "workspace_index_status": self._workspace_index_status,
+            "clear_workspace_index": self._clear_workspace_index,
+            "surgical_replace": self._surgical_replace,
+            "surgical_scan": self._surgical_scan,
+            "index_context": self._index_context,
+            "search_context": self._search_context,
+            "clear_index": self._clear_index,
+            "index_stats": self._index_stats,
+            "web_fetch": self._web_fetch,
+            "web_extract_links": self._web_extract_links,
         }
 
         handler = handlers.get(tool_name)
@@ -142,7 +170,15 @@ class AsyncToolExecutor:
             return f"Error: unknown tool '{tool_name}'"
 
         try:
-            return await handler(args)
+            return await asyncio.wait_for(
+                handler(args),
+                timeout=self.BUILTIN_TOOL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            return (
+                f"Error: built-in tool '{tool_name}' timed out "
+                f"after {self.BUILTIN_TOOL_TIMEOUT:.0f}s"
+            )
         except PermissionError as e:
             return f"Permission denied: {str(e)}"
         except Exception as e:
@@ -165,6 +201,8 @@ class AsyncToolExecutor:
             "web_search": Permission.NETWORK_OUT,
             "read_clipboard": Permission.PROCESS_EXEC,
             "write_clipboard": Permission.PROCESS_EXEC,
+            "copy_file": Permission.FILE_WRITE,
+            "move_file": Permission.FILE_WRITE,
         }
 
         perm = perm_map.get(tool_name)
@@ -176,9 +214,24 @@ class AsyncToolExecutor:
 
     def _safe_path(self, path: str) -> str:
         """验证并规范化路径，确保在工作区范围内。"""
+        # ★ 统一转为相对路径：避免 LLM 传入绝对路径导致 os.path.join 忽略 project_root，
+        # 以及 Windows 大小写差异导致的 startswith 失败。
+        if os.path.isabs(path):
+            try:
+                rel = os.path.relpath(path, self.project_root)
+                if not rel.startswith("..") or rel == ".":
+                    path = rel
+            except ValueError:
+                pass  # 跨盘符等无法计算相对路径的情况，保持原路径让后续检查处理
+
+        # NORP 安全系统：路径越界检查
+        result = self.norp_safe.check_path(path, workspace_root=self.project_root, task_id=self.task_id)
+        if result.blocked:
+            raise ValueError(f"NORP安全系统拦截: {result.reason}（威胁等级: {result.threat_level.value}）")
+
         full = os.path.abspath(os.path.join(self.project_root, path))
         if not full.startswith(self.project_root + os.sep) and full != self.project_root:
-            raise ValueError(f"Path out of bounds: {path}")
+            raise ValueError(f"NORP安全系统拦截: 路径越界 - {path}（工作区={self.project_root}）")
         return full
 
     def _map_to_sandbox(self, host_path: str) -> str:
@@ -192,45 +245,54 @@ class AsyncToolExecutor:
     # ═══════════════════════════════════════════════════════════════
 
     async def _read_file(self, args: dict) -> str:
+        """异步读取文件 — 实际 I/O 在线程池中执行，不阻塞事件循环。"""
         path = self._safe_path(args["path"])
         start_line = args.get("start_line")
         end_line = args.get("end_line")
+        allow_full = self.allow_full_read_large_files
 
         # 文件 I/O 队列：获取读权限
         await self.file_io_queue.acquire(self.task_id, path, FileOp.READ)
         try:
-            # ── 全量读取大文件开关 ──
-            # 默认关闭：不允许不指定行范围的情况下全量读取 >100KB 的文件
-            # 打开后（allow_full_read_large_files=True）模型可以读取任意大小文件
-            if start_line is None and end_line is None:
-                file_size = os.path.getsize(path)
-                MAX_FULL_READ_SIZE = 100 * 1024  # 100KB
-                if file_size > MAX_FULL_READ_SIZE and not self.allow_full_read_large_files:
-                    size_kb = file_size / 1024
-                    return (
-                        f"文件过大，仅能部分读取（{size_kb:.0f} KB > 100 KB）。\n"
-                        f"请使用 start_line / end_line 参数按行范围读取需要的代码片段。\n"
-                        f"也可先用 list_dir 查看文件大小，或用 search_large_file / "
-                        f"search_files / surgical_scan 定位后再读。"
-                    )
-            with open(path, "r", encoding="utf-8") as f:
-                if start_line is None and end_line is None:
-                    return f.read()
-                lines = f.readlines()
-                total = len(lines)
-                if start_line is None:
-                    start_line = 1
-                if end_line is None:
-                    end_line = total
-                start_line = max(1, start_line)
-                end_line = min(total, end_line)
-                if start_line > end_line:
-                    return f"Error: start_line ({start_line}) > end_line ({end_line})"
-                result = "".join(lines[start_line - 1:end_line])
-                header = f"[Lines {start_line}-{end_line} of {total}]\n"
-                return header + result
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                None,
+                self._read_file_sync,
+                path, start_line, end_line, allow_full,
+            )
         finally:
             self.file_io_queue.release(self.task_id, path, FileOp.READ)
+
+    @staticmethod
+    def _read_file_sync(path: str, start_line, end_line, allow_full: bool) -> str:
+        """同步读取文件（在线程池中运行）。"""
+        if start_line is None and end_line is None:
+            file_size = os.path.getsize(path)
+            MAX_FULL_READ_SIZE = 100 * 1024  # 100KB
+            if file_size > MAX_FULL_READ_SIZE and not allow_full:
+                size_kb = file_size / 1024
+                return (
+                    f"文件过大，仅能部分读取（{size_kb:.0f} KB > 100 KB）。\n"
+                    f"请使用 start_line / end_line 参数按行范围读取需要的代码片段。\n"
+                    f"也可先用 list_dir 查看文件大小，或用 search_large_file / "
+                    f"search_files / surgical_scan 定位后再读。"
+                )
+        with open(path, "r", encoding="utf-8") as f:
+            if start_line is None and end_line is None:
+                return f.read()
+            lines = f.readlines()
+            total = len(lines)
+            if start_line is None:
+                start_line = 1
+            if end_line is None:
+                end_line = total
+            start_line = max(1, start_line)
+            end_line = min(total, end_line)
+            if start_line > end_line:
+                return f"Error: start_line ({start_line}) > end_line ({end_line})"
+            result = "".join(lines[start_line - 1:end_line])
+            header = f"[Lines {start_line}-{end_line} of {total}]\n"
+            return header + result
 
     async def _write_file(self, args: dict) -> str:
         path = self._safe_path(args["path"])
@@ -308,8 +370,100 @@ class AsyncToolExecutor:
         finally:
             self.file_io_queue.release(self.task_id, path, FileOp.DELETE)
 
+    async def _copy_file(self, args: dict) -> str:
+        """异步复制文件或目录。"""
+        source = self._safe_path(args["source"])
+        destination = self._safe_path(args["destination"])
+
+        if not os.path.exists(source):
+            return f"Error: source not found: {source}"
+
+        # 如果目标已存在且是目录，复制到目录内
+        if os.path.isdir(destination):
+            dest = os.path.join(destination, os.path.basename(source))
+        else:
+            dest = destination
+
+        if os.path.exists(dest):
+            return f"Error: destination already exists: {dest}. Delete it first or choose a different name."
+
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+
+        # 文件 I/O 队列：写入权限
+        await self.file_io_queue.acquire(self.task_id, source, FileOp.READ)
+        await self.file_io_queue.acquire(self.task_id, dest, FileOp.WRITE)
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                self._copy_file_sync,
+                source, dest,
+            )
+            return f"Copied: {source} → {dest}"
+        except Exception as e:
+            return f"Failed to copy: {str(e)}"
+        finally:
+            self.file_io_queue.release(self.task_id, dest, FileOp.WRITE)
+            self.file_io_queue.release(self.task_id, source, FileOp.READ)
+
+    @staticmethod
+    def _copy_file_sync(source: str, dest: str):
+        """同步复制文件（在线程池中运行）。"""
+        if os.path.isdir(source):
+            shutil.copytree(source, dest)
+        else:
+            shutil.copy2(source, dest)
+
+    async def _move_file(self, args: dict) -> str:
+        """异步移动文件或目录（也可用于重命名）。"""
+        source = self._safe_path(args["source"])
+        destination = self._safe_path(args["destination"])
+
+        if not os.path.exists(source):
+            return f"Error: source not found: {source}"
+
+        # 如果目标已存在且是目录，移动到目录内
+        if os.path.isdir(destination):
+            dest = os.path.join(destination, os.path.basename(source))
+        else:
+            dest = destination
+
+        if os.path.exists(dest):
+            return f"Error: destination already exists: {dest}. Delete it first or choose a different name."
+
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+
+        # 文件 I/O 队列：写权限
+        await self.file_io_queue.acquire(self.task_id, source, FileOp.READ)
+        await self.file_io_queue.acquire(self.task_id, dest, FileOp.WRITE)
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                self._move_file_sync,
+                source, dest,
+            )
+            return f"Moved: {source} → {dest}"
+        except Exception as e:
+            return f"Failed to move: {str(e)}"
+        finally:
+            self.file_io_queue.release(self.task_id, dest, FileOp.WRITE)
+            self.file_io_queue.release(self.task_id, source, FileOp.READ)
+
+    @staticmethod
+    def _move_file_sync(source: str, dest: str):
+        """同步移动文件（在线程池中运行）。"""
+        shutil.move(source, dest)
+
     async def _list_dir(self, args: dict) -> str:
+        """异步列出目录 — 实际 I/O 在线程池中执行，不阻塞事件循环。"""
         path = self._safe_path(args.get("path", "."))
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._list_dir_sync, path)
+
+    @staticmethod
+    def _list_dir_sync(path: str) -> str:
+        """同步列出目录（在线程池中运行）。"""
         if not os.path.isdir(path):
             return f"Not a directory: {path}"
         items = os.listdir(path)
@@ -320,32 +474,61 @@ class AsyncToolExecutor:
         return "\n".join(sorted(dirs) + sorted(files))
 
     async def _search_in_files(self, args: dict) -> str:
+        """异步搜索文件内容 — os.walk + 文件读取在线程池中执行。
+
+        ★ 关键修复：之前此方法虽标记为 async def，但内部零 await，
+        os.walk() 遍历大目录（如 ComfyUI 数万文件）时直接阻塞事件循环，
+        导致 asyncio.wait_for 无法取消、整个 UI 挂起。
+        现在将阻塞 I/O 剥离到 run_in_executor 线程池中。
+        """
         pattern = args["pattern"]
         root = self._safe_path(args.get("path", "."))
+        project_root = self.project_root
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            self._search_in_files_sync,
+            pattern, root, project_root,
+        )
+
+    @staticmethod
+    def _search_in_files_sync(pattern: str, root: str, project_root: str) -> str:
+        """同步搜索文件内容（在线程池中运行）。
+
+        遍历目录 → 逐个文件读取匹配 → 最多返回 50 条结果。
+        """
         matches = []
         if os.path.isfile(root):
             targets = [root]
         else:
             targets = []
             for dirpath, _, filenames in os.walk(root):
+                # 跳过隐藏目录和常见忽略目录
+                try:
+                    rel_parts = Path(dirpath).relative_to(root).parts
+                except ValueError:
+                    rel_parts = ()
                 if any(part.startswith(".") or part in ("node_modules", "__pycache__", ".git")
-                       for part in Path(dirpath).relative_to(root).parts):
+                       for part in rel_parts):
                     continue
                 for fn in filenames:
                     if not fn.startswith("."):
                         targets.append(os.path.join(dirpath, fn))
+
         for filepath in targets:
             try:
                 with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                     for lineno, line in enumerate(f, 1):
                         if pattern in line:
-                            rel = os.path.relpath(filepath, self.project_root)
+                            rel = os.path.relpath(filepath, project_root)
                             matches.append(f"{rel}:{lineno}: {line.strip()[:120]}")
             except Exception:
                 continue
             if len(matches) >= 50:
                 matches.append("... (truncated, max 50 results)")
                 break
+
         return "\n".join(matches) if matches else "No matches found."
 
     # ═══════════════════════════════════════════════════════════════
@@ -356,11 +539,10 @@ class AsyncToolExecutor:
         cmd = args["command"]
         timeout = args.get("timeout", 30)
 
-        # 安全检查
-        dangerous = ["sudo", "rm -rf /", "mkfs", "dd if=", "> /dev/sda", "format c:"]
-        for pattern in dangerous:
-            if pattern in cmd.lower():
-                return f"Blocked dangerous command: matched '{pattern}'"
+        # NORP 安全系统：全面安全检查（危险命令 + UAC提权）
+        result = self.norp_safe.check_command_full(cmd, task_id=self.task_id)
+        if result.blocked:
+            return f"NORP安全系统拦截: {result.reason}（威胁等级: {result.threat_level.value}）"
 
         # 资源隔离检查
         if self.resource_isolator.throttle_plugins():
@@ -576,6 +758,19 @@ class AsyncToolExecutor:
         except Exception as e:
             return f"Failed to write clipboard: {str(e)}"
 
+    async def _unpack_archive(self, args: dict) -> str:
+        """安全解压缩文件。"""
+        path = self._safe_path(args["path"])
+        dest_dir = args.get("dest_dir")
+        if dest_dir:
+            dest_dir = self._safe_path(dest_dir)
+
+        def _do_unpack():
+            from archive_utils import unpack_archive
+            return unpack_archive(path, dest_dir)
+
+        return await asyncio.get_running_loop().run_in_executor(None, _do_unpack)
+
     async def _web_search(self, args: dict) -> str:
         query = args.get("query", "")
         if not query:
@@ -758,3 +953,328 @@ class AsyncToolExecutor:
     async def cleanup(self):
         """清理资源。"""
         await self.release_sandbox()
+
+    # ═══════════════════════════════════════════════════════════════
+    #  原生工具 handlers（从插件迁移，同步方法在线程池执行）
+    # ═══════════════════════════════════════════════════════════════
+
+    def _get_ws_index(self):
+        app_dir = self.app_dir if self.app_dir else ""
+        return get_workspace_index(app_dir=app_dir, project_root=self.project_root)
+
+    def _get_ctx_index(self):
+        app_dir = self.app_dir if self.app_dir else ""
+        return get_context_index(app_dir=app_dir, project_root=self.project_root)
+
+    async def _index_workspace(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._index_workspace_sync, args)
+
+    def _index_workspace_sync(self, args: dict) -> str:
+        index = self._get_ws_index()
+        directory = (args.get("directory") or "").strip()
+        if directory:
+            root = os.path.normpath(os.path.join(self.project_root, directory)) if not os.path.isabs(directory) else os.path.normpath(directory)
+        else:
+            root = os.path.normpath(self.project_root)
+        include_patterns = args.get("include_patterns") or []
+        exclude_dirs = set(args.get("exclude_dirs") or []) | {
+            ".git", "node_modules", "__pycache__", ".venv", "venv",
+            "dist", "build", ".idea", ".vscode", "output", "indexes",
+        }
+        max_file_mb = max(1.0, min(float(args.get("max_file_mb", 256)), 4096))
+        force = bool(args.get("force", False))
+        result = scan_and_index(index, root, include_patterns=include_patterns,
+                                exclude_dirs=exclude_dirs, max_file_mb=max_file_mb, force=force)
+        if "error" in result:
+            return f"❌ {result['error']}"
+        return (f"✅ **工作区索引完成**\n"
+                f"  索引根目录: `{result['root']}`\n"
+                f"  扫描文件: {result['scanned']}\n"
+                f"  新索引/更新: **{result['indexed']}** 个文件\n"
+                f"  耗时: {result['elapsed_seconds']} 秒\n\n"
+                f"💡 现在可用 `search_files(query='...')` 精确检索。")
+
+    async def _search_files_native(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._search_files_sync, args)
+
+    def _search_files_sync(self, args: dict) -> str:
+        query = (args.get("query") or "").strip()
+        if not query:
+            return "❌ 检索文本不能为空。"
+        index = self._get_ws_index()
+        stats = index.stats()
+        if stats["total_files"] == 0:
+            return "📭 工作区索引为空。请先调用 `index_workspace()` 建立索引。"
+        path_filter = (args.get("path") or "").strip()
+        if path_filter:
+            path_filter = os.path.normpath(os.path.join(self.project_root, path_filter)) if not os.path.isabs(path_filter) else os.path.normpath(path_filter)
+        file_pattern = (args.get("file_pattern") or "").strip()
+        case_sensitive = bool(args.get("case_sensitive", False))
+        exact_phrase = bool(args.get("exact_phrase", True))
+        top_k = max(1, min(int(args.get("top_k", 10)), 50))
+        max_lines_per_file = max(1, min(int(args.get("max_lines_per_file", 5)), 20))
+        line_context = max(0, min(int(args.get("line_context", 1)), 5))
+        result = index.search(query=query, top_k=top_k, path_filter=path_filter,
+                              file_pattern=file_pattern, case_sensitive=case_sensitive,
+                              exact_phrase=exact_phrase, max_lines_per_file=max_lines_per_file,
+                              line_context=line_context)
+        matches = result["matches"]
+        if not matches:
+            return f"🔍 未在索引中找到「**{query}**」"
+        mode = "完整短语匹配" if exact_phrase else "关键词 AND 匹配"
+        lines = [f"🔍 **文件内容精确检索**: `{query}`",
+                 f"  模式: {mode} | 命中: {result['total_lines_found']} 行 / {len(result['file_hits'])} 个文件\n"]
+        current_file = None
+        for m in matches:
+            if m["file"] != current_file:
+                current_file = m["file"]
+                try:
+                    rel = os.path.relpath(current_file, self.project_root)
+                except ValueError:
+                    rel = current_file
+                lines.append(f"📄 **{rel}**")
+            snippet = m["text"][:200] + ("…" if len(m["text"]) > 200 else "")
+            for cb in m["context_before"][-line_context:]:
+                if cb.strip():
+                    lines.append(f"    ┊ {cb.strip()[:150]}")
+            lines.append(f"  **L{m['line']}** │ {snippet}")
+            for ca in m["context_after"][:line_context]:
+                if ca.strip():
+                    lines.append(f"    ┊ {ca.strip()[:150]}")
+            lines.append("")
+        lines.append(f"📊 索引: {stats['total_files']} 文件, {stats['total_characters']:,} 字符")
+        return "\n".join(lines)
+
+    async def _find_files_native(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._find_files_sync, args)
+
+    def _find_files_sync(self, args: dict) -> str:
+        pattern = (args.get("name_pattern") or "").strip()
+        if not pattern:
+            return "❌ 文件名模式不能为空。"
+        index = self._get_ws_index()
+        path_filter = (args.get("path") or "").strip()
+        if path_filter:
+            path_filter = os.path.normpath(os.path.join(self.project_root, path_filter)) if not os.path.isabs(path_filter) else os.path.normpath(path_filter)
+        top_k = max(1, min(int(args.get("top_k", 30)), 100))
+        results = index.find_by_name(pattern, path_filter, top_k)
+        if not results:
+            return f"🔍 未找到文件名匹配「**{pattern}**」的文件。"
+        lines = [f"📁 **文件检索**: `{pattern}` — 共 {len(results)} 个文件\n"]
+        for r in results:
+            size_str = _wi_fmt_size(r["size"])
+            icon = {"indexed": "✅", "binary": "⚙️", "too_large": "🐘"}.get(r["status"], "❓")
+            rel = r["path"]
+            try:
+                rel = os.path.relpath(rel, self.project_root)
+            except ValueError:
+                pass
+            lines.append(f"  {icon} `{rel}` ({size_str})")
+        return "\n".join(lines)
+
+    async def _search_large_file(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._search_large_file_sync, args)
+
+    def _search_large_file_sync(self, args: dict) -> str:
+        path = (args.get("path") or "").strip()
+        query = (args.get("query") or "").strip()
+        if not path or not query:
+            return "❌ 需要同时提供 path 和 query。"
+        full = self._safe_path(path)
+        if not os.path.exists(full):
+            return f"❌ 文件不存在: `{full}`"
+        result = search_large_file_stream(
+            full, query, regex=bool(args.get("regex", False)),
+            case_sensitive=bool(args.get("case_sensitive", False)),
+            line_context=max(0, min(int(args.get("line_context", 2)), 10)),
+            max_matches=max(1, min(int(args.get("max_matches", 30)), 100)),
+            encoding=(args.get("encoding") or "").strip())
+        if "error" in result:
+            return f"❌ {result['error']}"
+        lines = [f"🔍 **大文件检索完成**",
+                 f"📄 文件: `{full}` ({_wi_fmt_size(result['file_size'])})",
+                 f"✅ 命中 **{len(result['matches'])}** 处",
+                 f"⏱️ 耗时 {result['elapsed_seconds']} 秒\n"]
+        for m in result["matches"]:
+            lines.append(f"  **L{m['line']:,}** │ {m['text']}")
+            for cb in m["context_before"][-3:]:
+                if cb.strip():
+                    lines.append(f"    ┊ {cb.strip()[:150]}")
+            lines.append("")
+        return "\n".join(lines)
+
+    async def _workspace_index_status(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._workspace_index_status_sync)
+
+    def _workspace_index_status_sync(self) -> str:
+        stats = self._get_ws_index().stats()
+        lines = ["📊 **工作区文件索引状态**", "",
+                 f"  索引根目录: `{stats.get('index_root') or '(未扫描)'}`",
+                 f"  登记文件数: {stats['total_files']}",
+                 f"  内容索引块数: {stats['total_chunks']:,}",
+                 f"  索引字符总量: {stats['total_characters']:,}",
+                 f"  上次扫描: {stats.get('last_scan') or '从未'}"]
+        dist = stats["status_distribution"]
+        if dist:
+            lines.append("  **文件状态分布**:")
+            for status, cnt in sorted(dist.items(), key=lambda x: x[1], reverse=True):
+                icon = {"indexed": "✅", "binary": "⚙️", "too_large": "🐘"}.get(status, "❓")
+                lines.append(f"    {icon} {status} — {cnt} 个")
+        return "\n".join(lines)
+
+    async def _clear_workspace_index(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._clear_workspace_index_sync, args)
+
+    def _clear_workspace_index_sync(self, args: dict) -> str:
+        index = self._get_ws_index()
+        path = (args.get("path") or "").strip()
+        if path:
+            full = os.path.normpath(os.path.join(self.project_root, path)) if not os.path.isabs(path) else os.path.normpath(path)
+            if os.path.isdir(full):
+                removed = index.remove_by_dir(full)
+                return f"✅ 已清除目录下 **{removed}** 个文件的索引。"
+            removed_chunks = index.remove_file(full)
+            return f"✅ 已清除文件索引（{removed_chunks} 个块）。"
+        stats_before = index.stats()
+        index.clear_all()
+        return f"✅ 已清空全部工作区文件索引。"
+
+    async def _surgical_replace(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._surgical_replace_sync, args)
+
+    def _surgical_replace_sync(self, args: dict) -> str:
+        file_path = self._safe_path(args.get("file_path", ""))
+        mode = args.get("mode", "replace")
+        valid_modes = ("replace", "insert_before", "insert_after", "delete", "replace_all")
+        if mode not in valid_modes:
+            return f"❌ 不支持的模式 `{mode}`。"
+        return perform_surgery(
+            file_path=file_path, line_number=args.get("line_number"),
+            old_content=args.get("old_content"), new_content=args.get("new_content"),
+            mode=mode, use_regex=args.get("use_regex", False),
+            count=args.get("count", 1), dry_run=args.get("dry_run", False),
+            context_lines=args.get("context_lines", 2),
+            backup=args.get("backup", False), encoding=args.get("encoding", "utf-8"))
+
+    async def _surgical_scan(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._surgical_scan_sync, args)
+
+    def _surgical_scan_sync(self, args: dict) -> str:
+        file_path = self._safe_path(args.get("file_path", ""))
+        pattern = args.get("pattern", "")
+        if not pattern:
+            return "❌ 必须提供 `pattern` 搜索模式。"
+        return perform_scan(
+            file_path=file_path, pattern=pattern,
+            use_regex=args.get("use_regex", False),
+            line_start=args.get("line_start"), line_end=args.get("line_end"),
+            context_lines=args.get("context_lines", 1),
+            max_matches=args.get("max_matches", 20),
+            encoding=args.get("encoding", "utf-8"))
+
+    async def _web_fetch(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, handle_web_fetch,
+            args.get("url", "").strip(),
+            args.get("max_chars", 8000),
+            args.get("timeout", 15))
+
+    async def _web_extract_links(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, handle_web_extract_links,
+            args.get("url", "").strip(),
+            args.get("same_domain_only", False),
+            args.get("max_links", 50),
+            args.get("timeout", 15))
+
+    async def _index_context(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._index_context_sync, args)
+
+    def _index_context_sync(self, args: dict) -> str:
+        content = args.get("content", "").strip()
+        source = args.get("source", "manual").strip() or "manual"
+        title = args.get("title", "").strip()
+        chunk_size = max(100, min(args.get("chunk_size", 500), 2000))
+        chunk_overlap = max(0, min(args.get("chunk_overlap", 100), chunk_size // 2))
+        if not content:
+            return "⚠️ 没有提供要索引的内容。"
+        retriever = self._get_ctx_index()
+        chunks = chunk_text(content, chunk_size, chunk_overlap)
+        count = 0
+        for i, chunk in enumerate(chunks):
+            if not chunk.strip():
+                continue
+            retriever.add(text=chunk, source=source,
+                          title=f"{title} [块 {i+1}/{len(chunks)}]" if title else "",
+                          chunk_index=i)
+            count += 1
+        retriever.flush()
+        return f"✅ 已索引 **{count}** 个文本块（来源: `{source}`）"
+
+    async def _search_context(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._search_context_sync, args)
+
+    def _search_context_sync(self, args: dict) -> str:
+        query = args.get("query", "").strip()
+        if not query:
+            return "❌ 搜索查询不能为空。"
+        retriever = self._get_ctx_index()
+        stats = retriever.stats()
+        if stats["total_documents"] == 0:
+            return "📭 索引为空。请先用 `index_context` 添加内容。"
+        results = retriever.search(
+            query=query, top_k=max(1, min(args.get("top_k", 5), 20)),
+            min_score=max(0.0, args.get("min_score", 0.1)),
+            source_filter=args.get("source_filter", "").strip() or "",
+            expand_context=args.get("expand_context", True))
+        if not results:
+            return f"🔍 未找到与「**{query}**」匹配的结果。"
+        lines = [f"🔍 **检索结果**: `{query}`", f"  匹配 {len(results)} 条\n"]
+        for i, r in enumerate(results, 1):
+            score_bar = "🟢" if r["score"] >= 2.0 else ("🟡" if r["score"] >= 0.5 else "🟠")
+            lines.append(f"**{i}.** {score_bar} `{r['source']}` — 分数: {r['score']:.3f}")
+            text = r["text"][:400] + ("..." if len(r["text"]) > 400 else "")
+            lines.append(f"   ```\n   {text}\n   ```")
+            lines.append("")
+        return "\n".join(lines)
+
+    async def _clear_index(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._clear_index_sync, args)
+
+    def _clear_index_sync(self, args: dict) -> str:
+        source_filter = args.get("source_filter", "").strip() or ""
+        retriever = self._get_ctx_index()
+        if source_filter:
+            removed = retriever.remove_by_source(source_filter)
+            return f"✅ 已清除来源 `{source_filter}` 的 **{removed}** 个文档。"
+        else:
+            stats_before = retriever.stats()
+            retriever.clear_all()
+            return f"✅ 已清空全部索引（共 {stats_before['total_documents']} 个文档）。"
+
+    async def _index_stats(self, args: dict) -> str:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._index_stats_sync)
+
+    def _index_stats_sync(self) -> str:
+        stats = self._get_ctx_index().stats()
+        lines = ["📊 **检索引擎统计**", "",
+                 f"  引擎: {stats.get('engine', 'Unknown')}",
+                 f"  总文档数: {stats['total_documents']}",
+                 f"  总字符数: {stats['total_characters']:,}"]
+        if stats["sources"]:
+            lines.append("  **来源分布**:")
+            for src, cnt in sorted(stats["sources"].items(), key=lambda x: x[1], reverse=True):
+                lines.append(f"    `{src}` — {cnt} 文档")
+        return "\n".join(lines)

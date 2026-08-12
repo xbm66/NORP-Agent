@@ -265,6 +265,9 @@ class PluginManager:
 
     def _setup_import_blockers(self):
         """Register import blockers based on current security config."""
+        if self.security.audit_level == "off":
+            return
+
         # If strict mode, use StrictImportBlocker
         if self.security.import_restriction == "strict":
             self._strict_blocker = StrictImportBlocker("vibe_plugin_")
@@ -572,9 +575,15 @@ class PluginManager:
 
         # ── Skip files that don't define any plugin interface ──
         # ★ 必须在注册工具/钩子之前执行此检查，防止残留注册
+        # ★ 但如果安全审计发现了问题，仍然注册以便前端显示审计结果
         if not info.tools and not info.hook_names and not callable(getattr(info.module, 'execute', None)):
-            _log.debug("Skipping '%s' – no TOOLS, hooks, or execute() defined", name)
-            return  # not a plugin
+            if not self._audit_results.get(name):
+                _log.debug("Skipping '%s' – no TOOLS, hooks, or execute() defined", name)
+                return  # not a plugin
+            # Has audit results – register as blocked plugin for visibility
+            info.enabled = False
+            if not info.error:
+                info.error = "Plugin module failed to load (see audit log)"
 
         # ── 通过了所有检查，现在才安全地注册工具和钩子 ──
         resolved_name = info.name

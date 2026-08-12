@@ -29,8 +29,8 @@ class ConfigManager:
         self.defaults = {
             "language": "zh_CN",
             "model": "deepseek-v4-pro",
-            "use_responses_api": True,
-            "encryption_method": "win32crypt",
+            "use_responses_api": False,
+            "encryption_method": "keyring",  # ★ 默认使用 keyring（Windows 凭据管理器），比 win32crypt+base64 文件更安全
             "api_base": "https://api.deepseek.com",
             "project_root": os.path.join(os.path.expanduser("~"), "vibe_workspace"),
             "queue_max_size": 2000,
@@ -53,7 +53,7 @@ class ConfigManager:
             # Plugin security
             "plugin_security_audit": "warn",
             "plugin_security_import_restrict": "off",
-            "plugin_security_require_permissions": False,
+            "plugin_security_require_permissions": True,   # ★ 默认开启：插件必须声明权限
             "plugin_security_resource_limit": False,
 
             # 全量读取大文件开关（默认关闭）
@@ -72,6 +72,16 @@ class ConfigManager:
             "custom_system_prompt_enabled": False,
             "custom_system_prompt": "",
             "custom_system_prompt_file": "",
+
+            # 越狱/提示词注入防护
+            "jailbreak_guard_enabled": True,    # ★ 默认开启越狱检测
+            "jailbreak_guard_action": "block",  # "block" = 拦截恶意输入；"warn" = 仅日志警告
+
+            # NORP 安全系统
+            "norp_safe_enabled": True,  # ★ 默认开启安全系统（危险命令/UAC/路径越界拦截）
+
+            # 关闭按钮行为：minimize_to_tray（最小化到任务栏托盘）/ exit（直接退出程序）
+            "close_button_behavior": "minimize_to_tray",
         }
 
     def load(self) -> Dict[str, Any]:
@@ -111,10 +121,11 @@ class ConfigManager:
 
     def get_api_key(self) -> Optional[str]:
         cfg = self.load()
-        method = cfg.get("encryption_method", "win32crypt")
+        method = cfg.get("encryption_method", "keyring")
         if method == "keyring":
             return keyring.get_password(KEYRING_SERVICE, KEYRING_USER)
         else:
+            # win32crypt 模式：从 base.env 文件解密
             if not os.path.exists(self.key_path):
                 return None
             with open(self.key_path, "rb") as f:
@@ -122,11 +133,22 @@ class ConfigManager:
             decrypted = win32crypt.CryptUnprotectData(
                 encrypted, None, None, None, 0
             )
-            return decrypted[1].decode("utf-8")
+            key = decrypted[1].decode("utf-8")
+            # ★ 自动迁移：将 win32crypt 存储的 Key 迁移到 keyring，
+            #   迁移后删除 base.env 文件，避免文件被直接复制窃取
+            try:
+                keyring.set_password(KEYRING_SERVICE, KEYRING_USER, key)
+                if os.path.exists(self.key_path):
+                    os.remove(self.key_path)
+                cfg["encryption_method"] = "keyring"
+                self.save(cfg)
+            except Exception:
+                pass  # keyring 不可用时静默回退，保留 win32crypt 模式
+            return key
 
     def set_api_key(self, key: str):
         cfg = self.load()
-        method = cfg.get("encryption_method", "win32crypt")
+        method = cfg.get("encryption_method", "keyring")
         if method == "keyring":
             keyring.set_password(KEYRING_SERVICE, KEYRING_USER, key)
             if os.path.exists(self.key_path):

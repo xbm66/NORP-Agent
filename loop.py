@@ -61,7 +61,7 @@ class AgentLoop:
         max_tokens: int = 32767,
         task_timeout: int = 0,
         plugin_manager: Optional[PluginManager] = None,
-        use_responses_api: bool = True,
+        use_responses_api: bool = False,
         custom_system_prompt: str = "",
     ):
         self.api_key = api_key
@@ -111,15 +111,20 @@ class AgentLoop:
             and not self._is_local_mode
         )
 
-        # ── Responses API 原生支持（DeepSeek V4 Flash 正式版）──
-        # 设置开关 use_responses_api 默认开启：
-        # - 仅官方端点 + flash 模型时启用（Responses API 目前仅支持 V4 Flash）
-        # - 非 flash 模型 / 自定义端点自动回退 Chat Completions
+        # OpenAI 官方端点检测
+        self._is_openai_official = (
+            base_url.rstrip('/') == "https://api.openai.com"
+            and not self._is_local_mode
+        )
+
+        # ── Responses API 原生支持（仅 OpenAI 端点）──
+        # 设置开关 use_responses_api 默认关闭：
+        # - DeepSeek 官方文档声明此接口无状态，开启后每次请求必须携带完整 input 历史，否则多轮对话将丢失上下文
+        # - OpenAI 官方将其 Responses API 定位为 Chat Completions API 的演进和升级
         # - 本地部署模式强制关闭（本地服务只兼容 Chat Completions）
         self._use_responses_api = (
             use_responses_api
-            and self._is_deepseek_official
-            and "flash" in model
+            and self._is_openai_official
         )
 
         # Anthropic 兼容搜索模式仅在未启用 Responses API 时使用
@@ -271,12 +276,9 @@ class AgentLoop:
         return build_full_messages(
             user_message, self.project_root, self.enable_web_search,
             history=history, memory_content=memory_content,
-            has_context_retriever=plugin_has_tool(
-                self.plugin_manager, "search_context"),
-            has_file_searcher=plugin_has_tool(
-                self.plugin_manager, "search_large_file"),
-            has_file_surgeon=plugin_has_tool(
-                self.plugin_manager, "surgical_replace"),
+            has_context_retriever=True,
+            has_file_searcher=True,
+            has_file_surgeon=True,
             plugin_tool_names=plugin_tool_names
         )
 
@@ -310,12 +312,9 @@ class AgentLoop:
                 plugin_tool_names = [t["function"]["name"] for t in pt]
         return build_system_prompt(
             self.project_root, self.enable_web_search,
-            has_context_retriever=plugin_has_tool(
-                self.plugin_manager, "search_context"),
-            has_file_searcher=plugin_has_tool(
-                self.plugin_manager, "search_large_file"),
-            has_file_surgeon=plugin_has_tool(
-                self.plugin_manager, "surgical_replace"),
+            has_context_retriever=True,
+            has_file_searcher=True,
+            has_file_surgeon=True,
             plugin_tool_names=plugin_tool_names,
             custom_prompt=self.custom_system_prompt)
 
@@ -323,6 +322,21 @@ class AgentLoop:
     def stop(self):
         self._stop_event.set()
         self._user_reply_event.set()
+
+        # ★ 僵尸进程防护：关闭 HTTP 客户端传输层
+        # 中断阻塞中的流式 API 请求，让线程能从网络等待中恢复
+        try:
+            if hasattr(self.client, 'close'):
+                self.client.close()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'anthropic_client') and self.anthropic_client:
+                if hasattr(self.anthropic_client, 'close'):
+                    self.anthropic_client.close()
+        except Exception:
+            pass
+
         if self.plugin_manager:
             self.plugin_manager.fire_agent_shutdown()
             self.plugin_manager.shutdown()  # reap abandoned hook threads
@@ -349,6 +363,18 @@ class AgentLoop:
         if not got_reply:
             # 用户交互超时：视为停止任务
             self._stop_event.set()
+            # ★ 关闭 HTTP 传输层，确保后续 stop 能立即生效
+            try:
+                if hasattr(self.client, 'close'):
+                    self.client.close()
+            except Exception:
+                pass
+            try:
+                if hasattr(self, 'anthropic_client') and self.anthropic_client:
+                    if hasattr(self.anthropic_client, 'close'):
+                        self.anthropic_client.close()
+            except Exception:
+                pass
             self.event_queue.put("E:User interaction timeout (30 min) — task aborted")
             return ""
         return self._user_reply_value
@@ -413,14 +439,32 @@ class AgentLoop:
         if self.plugin_manager:
             self.plugin_manager.fire_usage_update(self._total_usage.copy())
 
+    # 插件工具执行超时（秒）
+    PLUGIN_TOOL_TIMEOUT = 120.0
+
     def _execute_tool(self, tool_name: str, tool_args: dict) -> str:
-        """Execute a tool, routing to plugin or built-in executor."""
+        """Execute a tool, routing to plugin or built-in executor.
+
+        ★ 插件 execute() 是同步函数，可能在网络 IO / 文件读写 / 子进程上阻塞。
+        用 concurrent.futures 包装，加上硬超时防止永久挂起。
+        """
         # Check if it's a plugin tool first
         if self.plugin_manager:
             plugin_tools = self.plugin_manager.get_tools()
             plugin_names = {t["function"]["name"] for t in plugin_tools}
             if tool_name in plugin_names:
-                return self.plugin_manager.execute(tool_name, tool_args)
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(
+                        self.plugin_manager.execute, tool_name, tool_args
+                    )
+                    try:
+                        return future.result(timeout=self.PLUGIN_TOOL_TIMEOUT)
+                    except concurrent.futures.TimeoutError:
+                        return (
+                            f"Error: plugin tool '{tool_name}' timed out "
+                            f"after {self.PLUGIN_TOOL_TIMEOUT:.0f}s"
+                        )
         return self.executor.execute(tool_name, tool_args)
 
 
@@ -604,6 +648,7 @@ class AgentLoop:
             _last_ts_fire = 0.0
             _reasoning_buf = ""
             _content_buf = ""
+            _thinking_event_buf = ""  # 批量缓冲 T: 事件，避免碎片化
             _output_started = False  # track when output starts to flush thinking
 
             for chunk in stream:
@@ -636,12 +681,18 @@ class AgentLoop:
 
                 if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
                     reasoning_parts.append(delta.reasoning_content)
-                    self.event_queue.put(f"T:{delta.reasoning_content}")
                     _reasoning_buf += delta.reasoning_content
+                    _thinking_event_buf += delta.reasoning_content
+                    if len(_thinking_event_buf) >= 80:
+                        self.event_queue.put(f"T:{_thinking_event_buf}")
+                        _thinking_event_buf = ""
                 if hasattr(delta, 'content') and delta.content:
                     # First output chunk → tell front-end to finalize thinking block
                     if not _output_started:
                         _output_started = True
+                        if _thinking_event_buf:
+                            self.event_queue.put(f"T:{_thinking_event_buf}")
+                            _thinking_event_buf = ""
                         self.event_queue.put("F:")
                     content_parts.append(delta.content)
                     self.event_queue.put(f"R:{delta.content}")
@@ -658,6 +709,8 @@ class AgentLoop:
                         _content_buf = ""
                     _last_ts_fire = now
 
+            if _thinking_event_buf:
+                self.event_queue.put(f"T:{_thinking_event_buf}")
             # Flush remaining streaming tokens
             if self.plugin_manager:
                 if _reasoning_buf:
@@ -899,6 +952,7 @@ class AgentLoop:
             _last_ts_fire = 0.0
             _reasoning_buf = ""
             _content_buf = ""
+            _thinking_event_buf = ""  # 批量缓冲 T: 事件，避免碎片化
             _output_started = False  # track when output starts to flush thinking
 
             for event in stream:
@@ -910,13 +964,19 @@ class AgentLoop:
                 if et == "response.reasoning_text.delta":
                     delta = getattr(event, "delta", "") or ""
                     reasoning_parts.append(delta)
-                    self.event_queue.put(f"T:{delta}")
                     _reasoning_buf += delta
+                    _thinking_event_buf += delta
+                    if len(_thinking_event_buf) >= 80:
+                        self.event_queue.put(f"T:{_thinking_event_buf}")
+                        _thinking_event_buf = ""
                 elif et == "response.output_text.delta":
                     delta = getattr(event, "delta", "") or ""
                     # First output chunk → tell front-end to finalize thinking block
                     if not _output_started:
                         _output_started = True
+                        if _thinking_event_buf:
+                            self.event_queue.put(f"T:{_thinking_event_buf}")
+                            _thinking_event_buf = ""
                         self.event_queue.put("F:")
                     content_parts.append(delta)
                     self.event_queue.put(f"R:{delta}")
@@ -959,6 +1019,8 @@ class AgentLoop:
                         _content_buf = ""
                     _last_ts_fire = now
 
+            if _thinking_event_buf:
+                self.event_queue.put(f"T:{_thinking_event_buf}")
             # Flush remaining streaming tokens
             if self.plugin_manager:
                 if _reasoning_buf:
@@ -1280,6 +1342,7 @@ class AgentLoop:
                 _last_ts_fire = 0.0
                 _reasoning_buf = ""
                 _content_buf = ""
+                _thinking_event_buf = ""  # 独立缓冲区：批量发送 T: 事件，避免碎片化
 
                 for event in stream:
                     if self._stop_event.is_set():
@@ -1305,14 +1368,22 @@ class AgentLoop:
                         if hasattr(delta, 'thinking') and delta.thinking:
                             reasoning_parts.append(delta.thinking)
                             _current_thinking_text += delta.thinking
-                            self.event_queue.put(f"T:{delta.thinking}")
                             _reasoning_buf += delta.thinking
+                            _thinking_event_buf += delta.thinking
+                            # 本地缓冲：累积到 80 字符再发送，避免前端收到碎片化的 T: 事件
+                            # （Anthropic delta.thinking 粒度可能极细，一个词就一个 delta）
+                            if len(_thinking_event_buf) >= 80:
+                                self.event_queue.put(f"T:{_thinking_event_buf}")
+                                _thinking_event_buf = ""
                         if hasattr(delta, 'signature') and delta.signature:
                             _current_thinking_sig = delta.signature
                         if hasattr(delta, 'text') and delta.text:
-                            # First output chunk → tell front-end to finalize thinking block
+                            # First output chunk → flush thinking buffer & finalize thinking block
                             if not _output_started:
                                 _output_started = True
+                                if _thinking_event_buf:
+                                    self.event_queue.put(f"T:{_thinking_event_buf}")
+                                    _thinking_event_buf = ""
                                 self.event_queue.put("F:")
                             content_parts.append(delta.text)
                             self.event_queue.put(f"R:{delta.text}")
@@ -1333,6 +1404,10 @@ class AgentLoop:
                         if hasattr(event, 'content_block') and event.content_block:
                             cb = event.content_block
                             if cb.type == "thinking":
+                                # Flush 残留的 thinking 缓冲区
+                                if _thinking_event_buf:
+                                    self.event_queue.put(f"T:{_thinking_event_buf}")
+                                    _thinking_event_buf = ""
                                 final_text = getattr(cb, 'thinking', '') or _current_thinking_text
                                 final_sig = getattr(cb, 'signature', '') or _current_thinking_sig
                                 thinking_blocks.append({
@@ -1359,6 +1434,8 @@ class AgentLoop:
                                 }
 
                 # Flush remaining streaming tokens
+                if _thinking_event_buf:
+                    self.event_queue.put(f"T:{_thinking_event_buf}")
                 if self.plugin_manager:
                     if _reasoning_buf:
                         self.plugin_manager.fire_reasoning(_reasoning_buf)

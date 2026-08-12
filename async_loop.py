@@ -38,6 +38,10 @@ CHARS_PER_TOKEN = 3
 LOCAL_NUM_CTX_MAX = 65536
 LOCAL_NUM_CTX_MIN = 8192
 
+# ★ 僵尸进程防护：单次 API 请求最大等待时间（秒）
+# 超过此时间仍未收到任何 chunk，视为网络挂起，触发超时退出
+API_REQUEST_TIMEOUT = 180.0  # 3 分钟
+
 
 def estimate_tokens(text: str) -> int:
     if not text:
@@ -72,7 +76,7 @@ class AsyncAgentLoop:
         max_tokens: int = 32767,
         task_timeout: int = 0,
         plugin_manager=None,
-        use_responses_api: bool = True,
+        use_responses_api: bool = False,
         allow_full_read_large_files: bool = False,
         custom_system_prompt: str = "",
     ):
@@ -140,12 +144,17 @@ class AsyncAgentLoop:
             and not self._is_local_mode
         )
 
-        # Responses API：仅 DeepSeek 官方 + flash 模型；本地模式强制关闭
+        # OpenAI 官方端点检测
+        self._is_openai_official = (
+            base_url.rstrip('/') == "https://api.openai.com"
+            and not self._is_local_mode
+        )
+
+        # Responses API：仅 OpenAI 端点；本地模式强制关闭
         # （本地服务几乎都只兼容 OpenAI Chat Completions 协议）
         self._use_responses_api = (
             use_responses_api
-            and self._is_deepseek_official
-            and "flash" in model
+            and self._is_openai_official
         )
 
         # Anthropic 兼容搜索：仅 DeepSeek 官方端点；本地模式强制关闭
@@ -295,6 +304,11 @@ class AsyncAgentLoop:
         无人处理，导致 wait() 永久挂起（表现为"一直等待回复"）。
         必须通过 call_soon_threadsafe 把 set() 调度到 agent 事件循环线程，
         借助自管道唤醒机制立即生效。
+
+        ★ 僵尸进程防护：关闭 OpenAI HTTP 客户端传输层，中断阻塞中的网络请求。
+        即使线程池中的 _sync_stream 正阻塞在 for chunk in stream:，
+        关闭底层 TCP 连接会让 httpx 抛出 ReadError/ClosedError，
+        线程即可从阻塞中恢复并检查 _stop_event。
         """
         if self._agent_loop and not self._agent_loop.is_closed():
             # 调度到事件循环线程执行 set()，唤醒阻塞中的协程
@@ -303,6 +317,21 @@ class AsyncAgentLoop:
         else:
             self._stop_event.set()
             self._user_reply_event.set()
+
+        # ★ 僵尸进程防护：关闭 HTTP 客户端传输层
+        # OpenAI SDK 底层使用 httpx.Client，关闭其传输层会中断所有进行中的请求
+        # 这能让阻塞在 _sync_stream 线程中的 HTTP 流式读取立即抛出异常
+        try:
+            if hasattr(self.client, 'close'):
+                self.client.close()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'anthropic_client') and self.anthropic_client:
+                if hasattr(self.anthropic_client, 'close'):
+                    self.anthropic_client.close()
+        except Exception:
+            pass
 
         # 生命周期：杀进程组
         if self._task_lifecycle:
@@ -384,6 +413,18 @@ class AsyncAgentLoop:
                     self.lifecycle_manager.timeout_task(self._task_lifecycle.task_id)
                 except Exception:
                     pass
+            # ★ 关闭 HTTP 传输层，确保后续 stop 能立即生效
+            try:
+                if hasattr(self.client, 'close'):
+                    self.client.close()
+            except Exception:
+                pass
+            try:
+                if hasattr(self, 'anthropic_client') and self.anthropic_client:
+                    if hasattr(self.anthropic_client, 'close'):
+                        self.anthropic_client.close()
+            except Exception:
+                pass
             self.event_queue.put("E:User interaction timeout (30 min) — task aborted")
             return ""
 
@@ -687,6 +728,7 @@ class AsyncAgentLoop:
             tool_calls_accum = {}
             stream_usage = None
             _output_started = False
+            _thinking_event_buf = ""  # 批量缓冲 T: 事件
 
             try:
                 stream = self.client.chat.completions.create(**api_params)
@@ -722,15 +764,27 @@ class AsyncAgentLoop:
                     # 不一致，工具调用后思考过程显示破碎。
                     if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
                         reasoning_parts.append(delta.reasoning_content)
-                        self.event_queue.put(f"T:{delta.reasoning_content}")
+                        _thinking_event_buf += delta.reasoning_content
+                        if len(_thinking_event_buf) >= 80:
+                            self.event_queue.put(f"T:{_thinking_event_buf}")
+                            _thinking_event_buf = ""
                     if hasattr(delta, 'content') and delta.content:
                         if not _output_started:
                             _output_started = True
+                            if _thinking_event_buf:
+                                self.event_queue.put(f"T:{_thinking_event_buf}")
+                                _thinking_event_buf = ""
                             self.event_queue.put("F:")
                         content_parts.append(delta.content)
                         self.event_queue.put(f"R:{delta.content}")
             except Exception as e:
-                self.event_queue.put(f"E:API call failed: {str(e)}")
+                # 用户主动停止时 HTTP 传输层被关闭，静默处理连接中断错误
+                if not self._stop_event.is_set():
+                    self.event_queue.put(f"E:API call failed: {str(e)}")
+
+            # Flush 残留的 thinking 事件缓冲
+            if _thinking_event_buf:
+                self.event_queue.put(f"T:{_thinking_event_buf}")
 
             tool_calls_list = []
             for idx in sorted(tool_calls_accum.keys()):
@@ -752,25 +806,57 @@ class AsyncAgentLoop:
                 "usage": stream_usage,
             }
 
-        return await loop.run_in_executor(None, _sync_stream)
+        # ★ 僵尸进程防护：asyncio.wait_for 硬超时
+        # 即使线程池中的同步函数阻塞（网络挂起），事件循环也不会永久等待
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, _sync_stream),
+                timeout=API_REQUEST_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            self.event_queue.put("E:API request timeout (3 min) — network may be unreachable")
+            self._stop_event.set()
+            return {
+                "reasoning": "",
+                "content": "",
+                "tool_calls": [],
+                "usage": None,
+            }
 
     # ═══════════════════════════════════════════════════════════════
     #  工具调用处理（异步）
     # ═══════════════════════════════════════════════════════════════
 
+    # 插件工具执行超时（秒），防止插件阻塞事件循环导致挂起
+    PLUGIN_TOOL_TIMEOUT = 120.0
+
     async def _execute_tool_async(self, tool_name: str, tool_args: dict) -> str:
         """Execute a tool, routing to plugin or built-in executor (async-safe).
 
-        Mirrors loop.py._execute_tool() for the async path.
-        Plugin tools MUST be routed through PluginManager.execute();
-        otherwise they return "Error: unknown tool".
+        ★ 关键修复：插件 execute() 是同步函数（如 web_fetcher 用 requests 发 HTTP、
+        stress_tester 跑 subprocess、doc_reader 读大文件）。直接在 async 上下文中
+        调用会阻塞事件循环，导致前端轮询停止、思考过程显示中断、整个 UI 挂起。
+
+        修复方案：插件工具一律通过 run_in_executor 在线程池中执行，并设置 120s 硬超时。
         """
         # Check plugin tools first
         if self.plugin_manager:
             plugin_tools = self.plugin_manager.get_tools()
             plugin_names = {t["function"]["name"] for t in plugin_tools}
             if tool_name in plugin_names:
-                return self.plugin_manager.execute(tool_name, tool_args)
+                loop = asyncio.get_running_loop()
+                try:
+                    return await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None, self.plugin_manager.execute, tool_name, tool_args
+                        ),
+                        timeout=self.PLUGIN_TOOL_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    return (
+                        f"Error: plugin tool '{tool_name}' timed out "
+                        f"after {self.PLUGIN_TOOL_TIMEOUT:.0f}s"
+                    )
         # Fall back to built-in executor
         return await self.executor.execute(tool_name, tool_args)
 
@@ -984,6 +1070,7 @@ class AsyncAgentLoop:
             web_search_calls = []
             stream_usage = None
             _output_started = False
+            _thinking_event_buf = ""  # 批量缓冲 T: 事件
 
             try:
                 stream = self.client.responses.create(**api_params)
@@ -996,11 +1083,17 @@ class AsyncAgentLoop:
                     if et == "response.reasoning_text.delta":
                         delta = getattr(event, "delta", "") or ""
                         reasoning_parts.append(delta)
-                        self.event_queue.put(f"T:{delta}")
+                        _thinking_event_buf += delta
+                        if len(_thinking_event_buf) >= 80:
+                            self.event_queue.put(f"T:{_thinking_event_buf}")
+                            _thinking_event_buf = ""
                     elif et == "response.output_text.delta":
                         delta = getattr(event, "delta", "") or ""
                         if not _output_started:
                             _output_started = True
+                            if _thinking_event_buf:
+                                self.event_queue.put(f"T:{_thinking_event_buf}")
+                                _thinking_event_buf = ""
                             self.event_queue.put("F:")
                         content_parts.append(delta)
                         self.event_queue.put(f"R:{delta}")
@@ -1031,7 +1124,13 @@ class AsyncAgentLoop:
                                 "output_tokens": getattr(u, "output_tokens", 0) or 0
                             }
             except Exception as e:
-                self.event_queue.put(f"E:Responses API call failed: {str(e)}")
+                # 用户主动停止时 HTTP 传输层被关闭，静默处理连接中断错误
+                if not self._stop_event.is_set():
+                    self.event_queue.put(f"E:Responses API call failed: {str(e)}")
+
+            # Flush 残留的 thinking 事件缓冲
+            if _thinking_event_buf:
+                self.event_queue.put(f"T:{_thinking_event_buf}")
 
             tool_calls_list = []
             for item_id in sorted(tool_calls_accum.keys()):
@@ -1054,7 +1153,21 @@ class AsyncAgentLoop:
                 "usage": stream_usage,
             }
 
-        return await loop.run_in_executor(None, _sync_responses)
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, _sync_responses),
+                timeout=API_REQUEST_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            self.event_queue.put("E:Responses API request timeout (3 min) — network may be unreachable")
+            self._stop_event.set()
+            return {
+                "reasoning": "",
+                "content": "",
+                "tool_calls": [],
+                "web_search_calls": [],
+                "usage": None,
+            }
 
     # ═══════════════════════════════════════════════════════════════
     #  Anthropic 路径（异步）
@@ -1238,6 +1351,7 @@ class AsyncAgentLoop:
             tool_uses = []
             usage = None
             _output_started = False
+            _thinking_event_buf = ""  # 批量缓冲：避免碎片化 T: 事件直达前端
 
             call_params = {
                 "model": self.model,
@@ -1271,10 +1385,18 @@ class AsyncAgentLoop:
                             delta = event.delta
                             if hasattr(delta, 'thinking') and delta.thinking:
                                 reasoning_parts.append(delta.thinking)
-                                self.event_queue.put(f"T:{delta.thinking}")
+                                _thinking_event_buf += delta.thinking
+                                # 累积到 80 字符再发送，避免前端收到碎片化的 T: 事件
+                                if len(_thinking_event_buf) >= 80:
+                                    self.event_queue.put(f"T:{_thinking_event_buf}")
+                                    _thinking_event_buf = ""
                             if hasattr(delta, 'text') and delta.text:
                                 if not _output_started:
                                     _output_started = True
+                                    # Flush 残留 thinking 并结束思考块
+                                    if _thinking_event_buf:
+                                        self.event_queue.put(f"T:{_thinking_event_buf}")
+                                        _thinking_event_buf = ""
                                     self.event_queue.put("F:")
                                 content_parts.append(delta.text)
                                 self.event_queue.put(f"R:{delta.text}")
@@ -1282,6 +1404,10 @@ class AsyncAgentLoop:
                             if hasattr(event, 'content_block') and event.content_block:
                                 cb = event.content_block
                                 if cb.type == "thinking":
+                                    # Flush 残留的 thinking 缓冲区
+                                    if _thinking_event_buf:
+                                        self.event_queue.put(f"T:{_thinking_event_buf}")
+                                        _thinking_event_buf = ""
                                     thinking_blocks.append({
                                         "type": "thinking",
                                         "thinking": getattr(cb, 'thinking', ''),
@@ -1302,7 +1428,13 @@ class AsyncAgentLoop:
                                         "output_tokens": getattr(msg_usage, 'output_tokens', 0) or 0
                                     }
             except Exception as e:
-                self.event_queue.put(f"E:Anthropic API call failed: {str(e)}")
+                # 用户主动停止时 HTTP 传输层被关闭，静默处理连接中断错误
+                if not self._stop_event.is_set():
+                    self.event_queue.put(f"E:Anthropic API call failed: {str(e)}")
+
+            # Flush 残留的 thinking 事件缓冲
+            if _thinking_event_buf:
+                self.event_queue.put(f"T:{_thinking_event_buf}")
 
             return {
                 "reasoning": "".join(reasoning_parts),
@@ -1312,7 +1444,21 @@ class AsyncAgentLoop:
                 "usage": usage,
             }
 
-        return await loop.run_in_executor(None, _sync_anthropic)
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, _sync_anthropic),
+                timeout=API_REQUEST_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            self.event_queue.put("E:Anthropic API request timeout (3 min) — network may be unreachable")
+            self._stop_event.set()
+            return {
+                "reasoning": "",
+                "content": "",
+                "thinking_blocks": [],
+                "tool_uses": [],
+                "usage": None,
+            }
 
     # ═══════════════════════════════════════════════════════════════
     #  消息构建（复用原版逻辑）
@@ -1333,12 +1479,9 @@ class AsyncAgentLoop:
         return build_full_messages(
             user_message, self.project_root, self.enable_web_search,
             history=history, memory_content=memory_content,
-            has_context_retriever=plugin_has_tool(
-                self.plugin_manager, "search_context"),
-            has_file_searcher=plugin_has_tool(
-                self.plugin_manager, "search_large_file"),
-            has_file_surgeon=plugin_has_tool(
-                self.plugin_manager, "surgical_replace"),
+            has_context_retriever=True,
+            has_file_searcher=True,
+            has_file_surgeon=True,
             plugin_tool_names=plugin_tool_names)
 
     def _build_system_prompt(self) -> str:
@@ -1359,12 +1502,9 @@ class AsyncAgentLoop:
                 plugin_tool_names = [t["function"]["name"] for t in pt]
         return build_system_prompt(
             self.project_root, self.enable_web_search,
-            has_context_retriever=plugin_has_tool(
-                self.plugin_manager, "search_context"),
-            has_file_searcher=plugin_has_tool(
-                self.plugin_manager, "search_large_file"),
-            has_file_surgeon=plugin_has_tool(
-                self.plugin_manager, "surgical_replace"),
+            has_context_retriever=True,
+            has_file_searcher=True,
+            has_file_surgeon=True,
             plugin_tool_names=plugin_tool_names,
             custom_prompt=self.custom_system_prompt)
 

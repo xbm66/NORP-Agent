@@ -284,6 +284,10 @@ class PluginSecurity:
 
     def _setup_import_blocker(self):
         """Create (but don't register) the import blocker based on config."""
+        if self.audit_level == "off":
+            self._blocker = None
+            return
+
         blocked: Set[str] = set()
 
         if self.import_restriction == "safe":
@@ -291,11 +295,11 @@ class PluginSecurity:
             blocked = set(DANGEROUS_IMPORTS.keys())
         elif self.import_restriction == "strict":
             # Block everything NOT in STRICT_SAFE_MODULES
-            # We can't really enumerate "everything", so we use a different
-            # approach: block known dangerous + ALWAYS_BLOCKED
             blocked = set(DANGEROUS_IMPORTS.keys())
 
-        blocked |= ALWAYS_BLOCKED
+        # Always-blocked modules only apply when import restriction is active
+        if self.import_restriction != "off":
+            blocked |= ALWAYS_BLOCKED
 
         if blocked:
             self._blocker = PluginImportBlocker(blocked, self.plugin_prefix)
@@ -369,6 +373,9 @@ class PluginSecurity:
         permission values:
           ``"process"`` ``"network"`` ``"file_write"`` ``"file_read"``
         """
+        if self.audit_level == "off":
+            return True
+
         if not self.require_permissions:
             return True
 

@@ -20,6 +20,7 @@ from agent_shared import is_loopback_url
 from plugin_system.manager import PluginManager
 from lifecycle_manager import get_lifecycle_manager
 from sandbox_pool import get_sandbox_pool
+from jailbreak_guard import scan_message, JAILBREAK_HARDENING_PROMPT
 
 # 应用基础目录（main.py / api.py 所在目录，也是 official_plugins/ 的父目录）
 if getattr(sys, 'frozen', False):
@@ -98,6 +99,9 @@ class Session:
         self.memory_history: list = []
         self.memory_summary: str = ""
         self._app_dir = app_dir
+        # 僵尸进程防护
+        self._stopped: bool = False  # stop() 已被调用
+        self._zombie: bool = False  # stop() 后线程未退出（网络挂起等）
         self._load_memory()
 
     def _get_memory_file(self) -> str:
@@ -193,6 +197,9 @@ class AgentAPI:
         self.sessions: Dict[str, Session] = {}
         self._session_counter = 0
         self._sessions_lock = threading.Lock()
+        # 当窗口隐藏在任务栏托盘、且发生需要用户交互的事件（ask_user /
+        # 写删确认）时调用的回调。由 main.py 注册，用于弹通知并恢复窗口。
+        self._attention_callback = None
 
         # Create default session
         self._create_session_internal()
@@ -372,15 +379,63 @@ class AgentAPI:
             max_tokens=cfg.get("max_tokens", 32767),
             task_timeout=cfg.get("task_timeout", 0),
             plugin_manager=self.plugin_manager,
-            use_responses_api=cfg.get("use_responses_api", True),
+            use_responses_api=cfg.get("use_responses_api", False),
             allow_full_read_large_files=cfg.get("allow_full_read_large_files", False),
             custom_system_prompt=cfg.get("custom_system_prompt", "") if cfg.get("custom_system_prompt_enabled", False) else "",
         )
 
     def send_message(self, session_id: str, text: str) -> str:
         session = self._get_session(session_id)
+
+        # ── 越狱/提示词注入检测 ──
+        cfg = self.config_manager.load()
+        if cfg.get("jailbreak_guard_enabled", True):
+            blocked, reason, matches = scan_message(text)
+            if blocked:
+                action = cfg.get("jailbreak_guard_action", "block")
+                if action == "block":
+                    _log_msg = (
+                        f"[JailbreakGuard] BLOCKED user message in session {session_id}. "
+                        f"Reason: {reason}"
+                    )
+                    print(_log_msg)
+                    # 记录到日志
+                    try:
+                        log_path = os.path.join(self.app_dir, "jailbreak_guard.log")
+                        with open(log_path, "a", encoding="utf-8") as lf:
+                            from datetime import datetime as _dt
+                            lf.write(f"{_dt.now().isoformat()} | BLOCKED | session={session_id} | "
+                                     f"matches={matches}\n")
+                    except Exception:
+                        pass
+                    return ("error:Jailbreak attempt detected and blocked. "
+                            "Your message contains patterns that may attempt to bypass safety constraints. "
+                            "If you believe this is a false positive, you can disable the jailbreak guard "
+                            "in Settings (jailbreak_guard_enabled = false).")
+                else:
+                    # warn 模式：仅记录日志，放行
+                    print(f"[JailbreakGuard] WARNING: {reason}")
+                    try:
+                        log_path = os.path.join(self.app_dir, "jailbreak_guard.log")
+                        with open(log_path, "a", encoding="utf-8") as lf:
+                            from datetime import datetime as _dt
+                            lf.write(f"{_dt.now().isoformat()} | WARNING | session={session_id} | "
+                                     f"matches={matches}\n")
+                    except Exception:
+                        pass
+
         if session.loop and session._loop_thread and session._loop_thread.is_alive():
-            return "error:Task already running"
+            if session._zombie or session._stopped:
+                # 僵尸进程：上次 stop 后线程未能退出（网络挂起等）
+                # 放弃等待 daemon 线程，创建新 loop 允许用户继续使用
+                print(f"[ZombieGuard] Abandoning zombie thread for session {session_id}, "
+                      f"creating new loop")
+                session._loop_thread = None
+                session.loop = None
+                session._zombie = False
+                session._stopped = False
+            else:
+                return "error:Task already running"
         try:
             self._create_loop(session)
         except RuntimeError as e:
@@ -421,10 +476,14 @@ class AgentAPI:
                 elif final_reply in ("stopped", "timeout", "max_steps"):
                     session.current_messages.append({"role": "assistant",
                                                   "content": f"(Task {final_reply})"})
+                    # 任务自然终止（超时/停止/步数上限），标记 _stopped
+                    # 确保下次 send_message 时僵尸检测能正确识别
+                    session._stopped = True
             except Exception:
                 err = traceback.format_exc()
                 session.event_queue.put(f"E:{err}")
                 session.event_queue.signal_finish()
+                session._stopped = True
             finally:
                 # 清理沙箱池中的资源
                 try:
@@ -443,7 +502,22 @@ class AgentAPI:
         session = self._get_session(session_id)
         if not session.event_queue:
             return None
-        return session.event_queue.get()
+        event = session.event_queue.get()
+        # ── 需要用户注意的事件：ask_user（Q:）与写删确认（WC:）──
+        # 当窗口隐藏在任务栏托盘时，前端弹窗不可见，需通知用户并恢复窗口。
+        if event and (event.startswith("Q:") or event.startswith("WC:")):
+            if self._attention_callback is not None:
+                try:
+                    msg = ("NORP Agent 需要您的确认" if event.startswith("WC:")
+                           else "NORP Agent 需要您的输入")
+                    self._attention_callback(msg)
+                except Exception:
+                    pass
+        return event
+
+    def set_attention_callback(self, callback) -> None:
+        """注册"需要用户注意"回调。用于窗口隐藏在托盘时弹通知并恢复窗口。"""
+        self._attention_callback = callback
 
     def provide_user_input(self, session_id: str, text: str) -> str:
         session = self._get_session(session_id)
@@ -456,7 +530,22 @@ class AgentAPI:
         session = self._get_session(session_id)
         if not session.loop:
             return "error:No active task"
+
+        # ── 僵尸进程防护：两阶段停止 ──
+        # Phase 1: 软停止 — 设置 stop_event，关闭 HTTP 传输层
+        session._stopped = True
         session.loop.stop()
+
+        # Phase 2: 等待线程退出（最多 5 秒）
+        if session._loop_thread and session._loop_thread.is_alive():
+            session._loop_thread.join(timeout=5.0)
+            if session._loop_thread.is_alive():
+                # 线程在 5 秒后仍未退出 → 标记为僵尸，放弃等待
+                # daemon 线程会随进程退出自动清理，不影响后续任务
+                print(f"[ZombieGuard] Thread for session {session_id} stuck after stop — "
+                      f"abandoning as zombie (will not block future tasks)")
+                session._zombie = True
+
         return "stopped"
 
     # ═══════════════════════════════════════════════════════════════
@@ -754,20 +843,14 @@ class AgentAPI:
         return self.plugin_manager.plugin_dirs
 
     def _resolve_plugin_dirs(self, dirs: list) -> list:
-        """Always include official_plugins, deduplicate by realpath.
+        """Normalise and deduplicate plugin directories by realpath.
         Filters out non-existent directories and stale paths from old sessions.
 
-        This single funnel ensures *every* code path that sets plugin dirs
-        consistently includes the official built-in plugins.  Without this,
-        API methods like reload_plugins / add_plugin_dir would silently
-        drop official plugins, causing a wasteful unload→reload cycle the
-        next time send_message ran.
+        Official plugins are no longer auto-loaded — users must add them
+        explicitly via the plugin UI if desired.
         """
         resolved: List[str] = []
-        _official_dir = os.path.join(_APP_BASE_DIR, "official_plugins")
-        _official_real = os.path.realpath(_official_dir) if os.path.isdir(_official_dir) else ""
 
-        # 先规范化所有用户配置的目录，并过滤不存在的 + 与 official_plugins 重复的
         for d in dirs:
             if not d or not isinstance(d, str):
                 continue
@@ -779,19 +862,10 @@ class AgentAPI:
             if not os.path.isdir(d):
                 continue
             d_real = os.path.realpath(d)
-            # 跳过与 official_plugins 相同物理路径的目录
-            if _official_real and d_real == _official_real:
-                continue
             # 跳过重复目录
             if any(os.path.realpath(r) == d_real for r in resolved):
                 continue
             resolved.append(d)
-
-        # 始终把 official_plugins 放在最前面
-        if _official_real and not any(
-            os.path.realpath(r) == _official_real for r in resolved
-        ):
-            resolved.insert(0, _official_dir)
 
         return resolved
 
@@ -890,3 +964,75 @@ class AgentAPI:
         from resource_isolator import get_resource_isolator
         isolator = get_resource_isolator()
         return isolator.get_stats()
+
+    # ═══════════════════════════════════════════════════════════════
+    #  NORP 安全系统 API
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_norp_safe_logs(self, limit: int = 50) -> list:
+        """获取 NORP 安全拦截日志（NORPsafe.json）。"""
+        from norp_safe import get_norp_safe
+        nsp = get_norp_safe(self.app_dir)
+        return nsp.get_logs(limit)
+
+    def get_norp_safe_stats(self) -> dict:
+        """获取 NORP 安全系统统计。"""
+        from norp_safe import get_norp_safe
+        nsp = get_norp_safe(self.app_dir)
+        return nsp.get_stats()
+
+    def get_norp_safe_config(self) -> dict:
+        """获取 NORP 安全系统配置状态。"""
+        from norp_safe import is_norp_safe_enabled
+        cfg = self.config_manager.load()
+        return {
+            "enabled": cfg.get("norp_safe_enabled", True),
+            "runtime_enabled": is_norp_safe_enabled(),
+        }
+
+    def set_norp_safe_enabled(self, enabled: bool) -> str:
+        """启用/禁用 NORP 安全系统。
+
+        ⚠️ 禁用后所有安全检查（危险命令、UAC提权、路径越界）全部放行。
+        仅建议在受信任的隔离环境中使用。前端需做二次确认。
+        """
+        from norp_safe import set_norp_safe_enabled
+        cfg = self.config_manager.load()
+        cfg["norp_safe_enabled"] = enabled
+        self.config_manager.save(cfg)
+        set_norp_safe_enabled(enabled)
+        return "ok"
+
+    def test_norp_safe(self, command: str) -> dict:
+        """测试 NORP 拦截 — 传入命令文本，返回拦截结果。
+
+        前端用此 API 在设置面板中测试安全系统是否正常工作。
+        返回格式：{"blocked": bool, "reason": str, "threat_level": str,
+                    "command": str, "norp_enabled": bool}
+        """
+        from norp_safe import get_norp_safe, is_norp_safe_enabled
+
+        nsp = get_norp_safe(self.app_dir)
+        result = nsp.check_command_full(command, task_id="__test__")
+
+        return {
+            "blocked": result.blocked,
+            "reason": result.reason if result.blocked else "",
+            "threat_level": result.threat_level.value if result.blocked else "",
+            "command": command,
+            "norp_enabled": is_norp_safe_enabled(),
+        }
+
+    # ═══════════════════════════════════════════════════════════════
+    #  运行时完整性检测 API
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_runtime_health(self) -> dict:
+        """获取运行时完整性检测报告。"""
+        from runtime_check import get_cached_report, run_startup_check
+        report = get_cached_report()
+        if report is None:
+            # 如果缓存为空（不太可能），重新运行
+            source_dir = os.path.dirname(os.path.abspath(__file__))
+            report = run_startup_check(source_dir)
+        return report.to_dict()

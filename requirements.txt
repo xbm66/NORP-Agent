@@ -1,10 +1,18 @@
-pywebview>=5.0
-openai>=1.0.0
-anthropic>=0.30.0
-pywin32>=306
-keyring>=24.0
-requests>=2.28.0
-PyPDF2>=3.0.0
-python-docx>=0.8.11
-openpyxl>=3.1.0
-docker>=7.0.0
+# NORP Agent (Vibe Coding Agent) — Python 依赖
+# 安装: pip install -r requirements.txt
+
+# === 核心依赖（必须）===
+pywebview>=6.0          # 桌面窗口（WebView2 渲染前端）
+openai>=2.0             # OpenAI API 客户端
+anthropic>=0.120        # Anthropic Claude API 客户端
+pystray>=0.19           # 系统托盘图标
+pillow>=12.0            # 图像处理（托盘图标生成 + pystray 依赖）
+pywin32>=312            # Windows API（托盘、窗口管理等）
+keyring>=25.0           # 凭据安全存储（API Key 加密保存）
+requests>=2.34          # HTTP 请求（web_fetch 插件）
+
+# === 可选依赖（按需安装，缺少时相关功能不可用）===
+PyPDF2>=3.0             # PDF 文件读取（doc_reader 插件）
+python-docx>=1.2        # Word 文档读写（doc_reader / office_writer 插件）
+openpyxl>=3.1           # Excel 电子表格读写（doc_reader / office_writer 插件）
+python-pptx>=0.6.21     # PowerPoint 演示文稿读写（doc_reader / office_writer 插件）
