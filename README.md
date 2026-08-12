@@ -2,11 +2,6 @@
 
 > 桌面端 AI 编程助手，采用 ReAct 架构，将自然语言指令转化为精确的代码操作。
 
-[![Version](https://img.shields.io/badge/version-Release%201.0-blue.svg)]()
-[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%2B-lightgrey.svg)]()
-[![License](https://img.shields.io/badge/license-MIT-green.svg)]()
-
 ---
 
 ## 🎯 简介
@@ -29,16 +24,14 @@ NORP Agent 是一个基于 **pywebview** 的 Windows 桌面应用。它使用大
 
 ### 下载运行（推荐）
 
-从 [Releases](../../releases) 下载 `NORP Agent.exe`，双击运行。
+从 [[Releases](../../releases)](https://github.com/xingluosama121/NORP-Agent/releases/) 下载 `NORP Agent.exe`，双击运行。
 
 首次启动时需配置 API Key（支持 DeepSeek / OpenAI / Anthropic / 本地模型）。
 
 ### 开发者安装
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/your-username/norp-agent.git
-cd norp-agent
+# 1. 下载源代码
 
 # 2. 安装依赖
 pip install -r requirements.txt
@@ -50,13 +43,12 @@ python build_front.py
 python main.py
 ```
 
-### 本地模型（Ollama）
+### 本地模型（以Ollama为例）
 
 1. 安装 [Ollama](https://ollama.com)
 2. 拉取模型：`ollama pull qwen3`
-3. 在设置中 Base URL 填写 `http://localhost:11434/v1`
-4. API Key 任意填写（本地模式无需真实 key）
-
+3. 在设置中 Base URL 填写 `http://localhost:[端口]`
+4. 自动拉取模型列表
 ---
 
 ## 🏗️ 项目结构
@@ -125,9 +117,9 @@ norp-agent/
 
 ---
 
-## 🔧 内置工具一览（30 个）
+## 🔧 内置工具一览（32 个）
 
-### 文件操作
+### 文件操作（7个）
 | 工具 | 说明 |
 |---|---|
 | `read_file` | 读取文件内容，支持行范围 |
@@ -138,7 +130,7 @@ norp-agent/
 | `move_file` | 移动/重命名文件或目录 |
 | `list_dir` | 列出目录内容 |
 
-### 代码搜索与分析
+### 代码搜索与分析（7个）
 | 工具 | 说明 |
 |---|---|
 | `search_in_files` | 全局文本搜索（小型项目） |
@@ -149,13 +141,13 @@ norp-agent/
 | `workspace_index_status` | 查看索引统计 |
 | `clear_workspace_index` | 清理文件索引 |
 
-### 超大文件精确编辑
+### 超大文件精确编辑（2个）
 | 工具 | 说明 |
 |---|---|
 | `surgical_replace` | 分子手术刀 — 精确行编辑（替换/插入/删除） |
 | `surgical_scan` | 手术前扫描 — 定位目标行 |
 
-### 上下文与知识管理
+### 上下文与知识管理（4个）
 | 工具 | 说明 |
 |---|---|
 | `index_context` | 索引文本到 BM25 检索引擎 |
@@ -163,14 +155,14 @@ norp-agent/
 | `clear_index` | 清空上下文索引 |
 | `index_stats` | 检索引擎统计 |
 
-### 网络
+### 网络（3个）
 | 工具 | 说明 |
 |---|---|
 | `web_search` | 网页搜索 |
 | `web_fetch` | 抓取网页内容为纯文本 |
 | `web_extract_links` | 提取网页中所有超链接 |
 
-### 项目管理
+### 项目管理（4个）
 | 工具 | 说明 |
 |---|---|
 | `exec_cmd` | 执行 Shell 命令 |
@@ -178,7 +170,7 @@ norp-agent/
 | `install_dependency` | 安装项目依赖 |
 | `git_commit` | 提交变更到 Git |
 
-### 交互与杂项
+### 交互与杂项（5个）
 | 工具 | 说明 |
 |---|---|
 | `ask_user` | 向用户提问或请求确认 |
