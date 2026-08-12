@@ -6,17 +6,17 @@
 
 ## 🎯 简介
 
-NORP Agent 是一个基于 **pywebview** 的 Windows 桌面应用。它使用大语言模型（DeepSeek / OpenAI / Anthropic / 本地 Ollama）驱动，能够自主读取、搜索、修改项目文件，执行 shell 命令，并安装依赖——全程在沙箱隔离和权限级联的安全约束下运行。
+NORP Agent 是一个基于 **pywebview** 的 Windows 桌面应用。它使用大语言模型（DeepSeek / OpenAI / Anthropic / 本地部署大模型）驱动，能够自主读取、搜索、修改项目文件，执行 shell 命令，并安装依赖——全程在沙箱隔离和权限级联的安全约束下运行。
 
 **核心特性：**
 
-- 🧠 **多模型支持** — DeepSeek V4 Pro/Flash、OpenAI、Anthropic、本地 Ollama / LM Studio / vLLM
+- 🧠 **多模型支持** — DeepSeek V4 Pro/Flash、OpenAI、Anthropic、本地 Ollama / LM Studio / vLLM / 其他本地部署方式
 - 🔧 **30 个内置工具** — 文件读写、代码搜索、超大文件精确编辑、上下文检索、网页抓取、Shell 执行、Git 提交等
 - 🧩 **插件系统** — 4 层 16 个钩子 + 8 个官方插件，可无限扩展
 - 🛡️ **多层安全** — NORP 安全系统（危险命令拦截 + UAC 提权检测 + 路径越界防护）、越狱注入检测、运行时完整性校验
 - 🪟 **原生体验** — 系统托盘最小化、启动 Splash 画面、Windows 凭据管理器加密存储 API Key
 - 🌐 **多语言** — 简体中文 / 繁体中文 / English / Русский / 日本語
-- 📦 **单文件打包** — PyInstaller 打包为单 exe（约 38 MB），开箱即用
+- 📦 **单文件打包** — PyInstaller 打包为单 exe（约 37 MB），开箱即用
 
 ---
 
@@ -26,7 +26,8 @@ NORP Agent 是一个基于 **pywebview** 的 Windows 桌面应用。它使用大
 
 从 [[Releases](../../releases)](https://github.com/xingluosama121/NORP-Agent/releases/) 下载 `NORP Agent.exe`，双击运行。
 
-首次启动时需配置 API Key（支持 DeepSeek / OpenAI / Anthropic / 本地模型）。
+首次启动时需配置 API Key（支持 DeepSeek / OpenAI / Anthropic ）。
+特殊：若使用本地部署模型则**不需要**配置 API Key。
 
 ### 开发者安装
 
