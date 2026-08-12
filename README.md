@@ -7,6 +7,7 @@
 ## 🎯 简介
 
 NORP Agent 是一个基于 **pywebview** 的 Windows 桌面应用。它使用大语言模型（DeepSeek / OpenAI / Anthropic / 本地部署大模型）驱动，能够自主读取、搜索、修改项目文件，执行 shell 命令，并安装依赖——全程在沙箱隔离和权限级联的安全约束下运行。
+NORP Studios**不会**主动收集您的数据，NORP Agent仅发送必要的片段到API供应商。若搭配本地部署大模型，可以实现真正的**数据不上云**。
 
 **核心特性：**
 
