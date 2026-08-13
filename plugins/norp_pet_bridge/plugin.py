@@ -20,7 +20,7 @@ NORP Pet Bridge 插件（v2.0 —— 宠物整个塞进来了）
 
 PLUGIN_NAME = "NORP Pet Bridge"
 PLUGIN_PUBLISHER = "norp-pet"
-PLUGIN_VERSION = "2.1.0"
+PLUGIN_VERSION = "2.1.1"
 PLUGIN_DESCRIPTION = "桌面小伙伴已完整内嵌插件：启动自动唤出、退出自动回收、崩溃自愈；含好感度/陪伴天数/名字自定义/节日问候养成系统"
 
 import json
