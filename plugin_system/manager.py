@@ -292,12 +292,25 @@ class PluginManager:
             return dict(self._audit_results)
 
     def get_tools(self) -> List[dict]:
-        """Return the merged tool definitions from all enabled plugins."""
+        """Return the merged tool definitions from all enabled plugins.
+
+        按工具名去重：不同插件若声明了同名工具，只返回第一个。
+        （_load_from_file 的同名守卫只保护 _tool_registry 调度表，
+        插件自身 info.tools 里仍可能残留重复定义；若不在这里去重，
+        组装给 API 的工具列表会出现重名，Anthropic 兼容端点会
+        返回 400 'Tool names must be unique'。）
+        """
         tools: List[dict] = []
+        seen = set()
         with self._lock:
             for info in self._plugins.values():
                 if info.enabled and info.tools:
-                    tools.extend(info.tools)
+                    for tool in info.tools:
+                        tname = tool.get("function", {}).get("name", "")
+                        if not tname or tname in seen:
+                            continue
+                        seen.add(tname)
+                        tools.append(tool)
         return tools
 
     def get_all_plugins(self) -> List[dict]:

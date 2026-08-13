@@ -29,6 +29,26 @@ user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
 kernel32 = ctypes.windll.kernel32
 
+
+# 钩子诊断日志开关：排障时临时改为 True，平时必须保持 False！
+# ⚠️ 钩子回调运行在 Windows 系统输入管线上（每次鼠标按键都触发），
+# 里面做任何磁盘 IO（open/write/close）都会被杀软实时扫描，一次
+# 卡顿 10~100ms+，直接造成全系统「鼠标突然卡住、几秒后恢复」。
+_HOOK_DEBUG_LOG = False
+
+
+def _hook_dbg(msg):
+    """钩子诊断日志（排障用）。默认关闭：系统输入管线上严禁磁盘 IO。"""
+    if not _HOOK_DEBUG_LOG:
+        return
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "hook_debug.log"), "a",
+                  encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
+
 WS_POPUP = 0x80000000
 WS_EX_LAYERED = 0x00080000
 WS_EX_TOOLWINDOW = 0x00000080
@@ -297,3 +317,163 @@ def create_layered(x, y, w, h):
         return LayeredImage(x, y, w, h)
     except Exception:
         return None
+
+
+# ======================================================================
+# 全局低级鼠标钩子（WH_MOUSE_LL）
+# ======================================================================
+# 背景：宠物所有交互依赖「窗口鼠标消息投递」（WNDPROC 子类化转发）。
+# 游戏运行时（全屏 / SetCapture 捕获 / 独占输入 / 管理员权限 UIPI）
+# 会劫持或独占鼠标消息，宠物窗口收不到 WM_LBUTTONDOWN / WM_RBUTTONDOWN
+# → 表现为「拖不动、右键无反应」。
+# 低级鼠标钩子挂在系统输入流上（消息分发之前），不受窗口消息投递
+# 影响：只要光标落在宠物窗口上（且 WindowFromPoint 确认宠物确实在
+# 顶层可见），就由钩子直接消费事件并喂给事件桥；否则原样放行，
+# 游戏操作完全不受影响。
+WH_MOUSE_LL = 14            # 全局低级鼠标钩子（回调在安装线程内执行）
+HC_ACTION = 0
+
+# 钩子只关心这些消息（拖动/单击/双击/右键；MOUSEMOVE 由 Tk 轮询拖动处理）
+_HOOK_MSGS = frozenset((WM_LBUTTONDOWN, WM_LBUTTONUP, WM_LBUTTONDBLCLK,
+                        WM_RBUTTONDOWN, WM_RBUTTONUP, WM_RBUTTONDBLCLK))
+
+
+class MSLLHOOKSTRUCT(ctypes.Structure):
+    """低级鼠标钩子事件数据（lParam 指向的原始结构）。"""
+    _fields_ = [
+        ("pt", wintypes.POINT),        # 事件发生时的屏幕坐标（物理像素）
+        ("mouseData", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),   # ULONG_PTR
+    ]
+
+
+LowLevelMouseProc = ctypes.WINFUNCTYPE(
+    ctypes.c_ssize_t, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+
+
+# 一次性设置 Win32 签名（防止 64 位句柄被默认 int 截断）
+user32.WindowFromPoint.argtypes = [wintypes.POINT]
+user32.WindowFromPoint.restype = wintypes.HWND
+user32.GetWindowRect.argtypes = [wintypes.HWND,
+                                 ctypes.POINTER(wintypes.RECT)]
+user32.GetWindowRect.restype = wintypes.BOOL
+user32.SetWindowsHookExW.argtypes = [ctypes.c_int, LowLevelMouseProc,
+                                     wintypes.HINSTANCE, wintypes.DWORD]
+user32.SetWindowsHookExW.restype = wintypes.HHOOK
+user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int,
+                                  wintypes.WPARAM, wintypes.LPARAM]
+user32.CallNextHookEx.restype = ctypes.c_ssize_t
+
+
+class MouseHook:
+    """全局低级鼠标钩子：光标在宠物窗口内时直接消费鼠标事件。
+
+    与 WNDPROC 子类化互为双保险（互不冲突）：
+      · WNDPROC 收到的是「系统投递给本窗口」的消息 —— 依赖消息投递；
+      · 钩子收到的是「系统输入流」上的全部事件 —— 不依赖投递。
+    钩子拦截（返回 1）后消息不再继续投递 → WNDPROC 收不到 → 不会重复；
+    钩子放行（返回 0）时消息正常流转 → WNDPROC 兜底 → 不会漏事件。
+    """
+
+    def __init__(self, hwnd, bridge):
+        self._hwnd = hwnd
+        self._bridge = bridge          # 事件桥回调（只入队，绝不调 Tk）
+        self._hook = None
+        self._proc = LowLevelMouseProc(self._callback)
+        self.lbutton_down = False      # 钩子侧左键状态（钩子吞掉消息后
+                                       # GetAsyncKeyState 读不到输入流，
+                                       # 拖动释放判定改由本状态驱动）
+        self._drag_armed = False       # 最近一次 DOWN 被宠物命中拦截 → True；
+                                       # 收到 UP 后复位。用于把「宠物外松手」
+                                       # 的 UP 转发给宠物结束拖动（不拦截）。
+        # WH_MOUSE_LL 全局钩子：dwThreadId=0、hMod 可空；
+        # 回调在安装线程（Tk 主线程消息循环）上下文执行，只做轻量操作。
+        self._hook = user32.SetWindowsHookExW(
+            WH_MOUSE_LL, self._proc, None, 0)
+        if not self._hook:
+            self._proc = None
+
+    @property
+    def ok(self):
+        return bool(self._hook)
+
+    def _callback(self, nCode, wParam, lParam):
+        try:
+            if nCode == HC_ACTION and wParam in _HOOK_MSGS:
+                data = ctypes.cast(lParam,
+                                   ctypes.POINTER(MSLLHOOKSTRUCT)).contents
+                pt = data.pt
+                # 钩子侧持续跟踪左键物理状态（不依赖 GetAsyncKeyState：
+                # 消息被本钩子吞掉后，GetAsyncKeyState 读输入流读不到）
+                if wParam == WM_LBUTTONDOWN:
+                    self.lbutton_down = True
+                elif wParam == WM_LBUTTONUP:
+                    self.lbutton_down = False
+                # 光标下最顶层窗口必须是宠物本尊才拦截：宠物被其他窗口
+                # 盖住（如独占全屏游戏）时 WindowFromPoint 返回盖住它的
+                # 窗口 → 放行，绝不抢游戏/其他程序的点击。
+                top = user32.WindowFromPoint(pt)
+                hit = (top == self._hwnd)
+                _hook_dbg("evt=0x%04X pt=(%d,%d) top=0x%X hwnd=0x%X hit=%s armed=%s" % (
+                    wParam, pt.x, pt.y, top, self._hwnd, hit, self._drag_armed))
+                if hit:
+                    rect = wintypes.RECT()
+                    if user32.GetWindowRect(self._hwnd, ctypes.byref(rect)):
+                        if (rect.left <= pt.x < rect.right
+                                and rect.top <= pt.y < rect.bottom):
+                            x = pt.x - rect.left
+                            y = pt.y - rect.top
+                            # 编码成窗口消息 lParam 格式（客户区坐标，
+                            # 低 16 位 x / 高 16 位 y），与 pet.py
+                            # _consume_mouse 的解析完全兼容。
+                            lp = ((y & 0xFFFF) << 16) | (x & 0xFFFF)
+                            if wParam == WM_LBUTTONDOWN:
+                                self._drag_armed = True
+                            elif wParam == WM_LBUTTONUP:
+                                self._drag_armed = False
+                            _hook_dbg("  -> CONSUME x=%d y=%d" % (x, y))
+                            self._bridge(wParam, 0, lp)
+                            return 1    # 消费：消息不再投递（游戏收不到）
+                        _hook_dbg("  -> rect miss rect=(%d,%d,%d,%d)" % (
+                            rect.left, rect.top, rect.right, rect.bottom))
+                # 宠物外松手：正在拖宠物（DOWN 曾被命中）时把 UP 转发给
+                # 宠物结束拖动（不拦截，其他窗口照常收到点击）
+                if wParam == WM_LBUTTONUP and self._drag_armed:
+                    rect = wintypes.RECT()
+                    if user32.GetWindowRect(self._hwnd, ctypes.byref(rect)):
+                        x = pt.x - rect.left
+                        y = pt.y - rect.top
+                        lp = ((y & 0xFFFF) << 16) | (x & 0xFFFF)
+                        self._drag_armed = False
+                        _hook_dbg("  -> FORWARD UP (drag end) x=%d y=%d" % (x, y))
+                        self._bridge(wParam, 0, lp)
+        except Exception:
+            pass
+        try:
+            return user32.CallNextHookEx(None, nCode, wParam, lParam)
+        except Exception:
+            return 0
+
+    def close(self):
+        if self._hook:
+            try:
+                user32.UnhookWindowsHookEx(self._hook)
+            except Exception:
+                pass
+            self._hook = None
+        self._proc = None
+
+
+def install_mouse_hook(hwnd, bridge):
+    """安装全局低级鼠标钩子；失败返回 None（静默降级到 WNDPROC 方案）。"""
+    try:
+        h = MouseHook(hwnd, bridge)
+        if h.ok:
+            return h
+    except Exception:
+        pass
+    return None

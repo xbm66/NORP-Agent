@@ -40,10 +40,17 @@ except ImportError:
     _PIL_OK = False
 
 try:
-    from alpha_render import create_layered   # 真 alpha 分层渲染（Windows）
+    from alpha_render import create_layered, install_mouse_hook   # 真 alpha 分层渲染（Windows）
     _LAYERED_OK = True
 except Exception:
     _LAYERED_OK = False
+
+# 调试日志开关：默认 False（宠物平时不写任何文件日志）。
+# ⚠️ 磁盘 IO 会触发杀软实时扫描，Tk 主线程/鼠标事件路径上高频
+# 写日志 = 整机卡顿（鼠标突然卡住、几秒后恢复）。排障时临时
+# 改为 True，排完立刻改回 False。
+_DBG_FILE_LOG = False
+_dbg_last_ts = [0.0]      # _dbg 节流时间戳（list 便于 staticmethod 内赋值）
 
 # ---------------------------------------------------------------------------
 # 单实例锁：防止多开（桌面上叠出好几只宠物）
@@ -220,6 +227,9 @@ DEFAULT_CONFIG = {
     "coins": 100,                     # 金币（无上限）
     "mood": 50,                       # 心情（0~100）
     "satiety": 50,                    # 饱食度（0~100）
+    "inventory": {},                  # 背包：商店购买的物品（持久化）
+    "first_launch": 0,                # 首次启动时间戳（相识时间基准，永久保存）
+    "today_launch": 0,                # 今日首次启动时间戳（跨天自动重置）
 }
 
 # ---------------------------------------------------------------------------
@@ -392,7 +402,17 @@ class PetApp:
         # ---- 相识时间（首次启动记录，永久保存）----
         self._first_launch = float(self.cfg.get("first_launch", 0) or 0)
         if self._first_launch <= 0:
-            self._first_launch = time.time()
+            # 防呆：即使 JSON 解析失败/键缺失，也先尝试从文件原文找回旧值，避免误重置
+            _old_ts = 0.0
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8") as _f:
+                    import re as _re
+                    _m = _re.search(r'"first_launch"\s*:\s*([0-9.]+)', _f.read())
+                if _m:
+                    _old_ts = float(_m.group(1))
+            except Exception:
+                _old_ts = 0.0
+            self._first_launch = _old_ts if _old_ts > 0 else time.time()
             self.cfg["first_launch"] = self._first_launch
         # ---- 今日工作计时：今天第一次启动的时刻（跨天自动重置）----
         self._today_launch = float(self.cfg.get("today_launch", 0) or 0)
@@ -474,6 +494,7 @@ class PetApp:
         # 由分层窗口做逐像素 alpha 合成，边缘像素级平滑。创建失败自动
         # 回退到 Tk canvas 绘制（旧渲染）。
         self._layered = None
+        self._mouse_hook = None    # 全局低级鼠标钩子（游戏/全屏兜底交互）
         self._pil_font = None      # 缓存 PIL 气泡字体
         if _LAYERED_OK and self._has_pil:
             try:
@@ -487,6 +508,15 @@ class PetApp:
                     # 点不到、拖不动。Tk 对注入的 Win32 消息不产生 Tk
                     # 事件，必须用 Tk 官方事件生成 API。
                     self._layered.attach_bridge(self._mouse_bridge)
+                    # 全局低级鼠标钩子兜底：游戏/全屏/SetCapture/独占输入
+                    # 会劫持窗口鼠标消息（拖不动、右键无反应），钩子从
+                    # 系统输入流直接消费光标落在宠物上的事件，不依赖
+                    # 消息投递；光标在宠物外时原样放行，互不干扰。
+                    self._mouse_hook = install_mouse_hook(
+                        self._layered.hwnd, self._mouse_bridge)
+                    self._dbg("mouse hook install: %s" % (
+                        "OK" if self._mouse_hook else
+                        "FAILED (WNDPROC fallback)"))
             except Exception:
                 self._layered = None
 
@@ -723,9 +753,12 @@ class PetApp:
                     self.say("躲墙角好无聊……还是出来找sensei玩吧！", expr="happy")
 
         # NORP 状态定期探测（5 秒一次）：API 在线 > EXE 进程在跑 > 未运行
+        # 在线状态由 _poll_loop 后台线程每 3 秒探测并回写 _api_online，
+        # 这里只读标志——绝不在 Tk 主线程发同步 HTTP 请求（NORP 关闭时
+        # 连接可能等 2 秒超时，期间全局鼠标钩子无法响应 → 整机卡顿）。
         if now >= self._api_check_at:
             self._api_check_at = now + self._api_check_interval
-            online = self.check_norp_api()
+            online = self._api_online
             proc = online or self.check_norp_process()
             state = "api" if online else ("exe" if proc else "none")
             if state != self._norp_state:
@@ -995,6 +1028,13 @@ class PetApp:
             except Exception:
                 pass
             self._layered = None
+            # 分层窗口已销毁，全局钩子一并卸载（hwnd 失效后钩子无意义）
+            if self._mouse_hook is not None:
+                try:
+                    self._mouse_hook.close()
+                except Exception:
+                    pass
+                self._mouse_hook = None
             self._draw_tk(cx, cy, wobble)
 
     def _bubble_font(self):
@@ -1158,6 +1198,60 @@ class PetApp:
     # ==================================================================
     # 交互
     # ==================================================================
+    def _hook_pause(self):
+        """暂停全局低级鼠标钩子（阻塞模态弹窗期间必须调用）。
+
+        tk_popup / simpledialog 等模态循环运行期间，光标往往落在宠物
+        身上（菜单贴着宠物弹出、宠物就在对话框下方），此时钩子会把
+        「点击模态窗口外部→取消/关闭模态」的消息全部吞掉（return 1），
+        模态循环永远结束不了 → 整个 Tk 卡死（菜单取消不掉、点宠物
+        无反应、拖不动、动画冻结）。模态开始前卸载钩子即可根治；
+        模态结束后由 _hook_resume 重装，游戏/全屏兜底交互不受影响。
+        """
+        if self._mouse_hook is not None:
+            try:
+                self._mouse_hook.close()
+            except Exception:
+                pass
+            self._mouse_hook = None
+
+    def _hook_resume(self):
+        """模态结束后重装全局低级鼠标钩子（游戏/全屏兜底交互）。
+
+        安装失败自动重试（Windows 全局钩子有瞬时资源限制，重装可能
+        偶发失败——失败后钩子丢失会表现为游戏/全屏里拖不动），
+        最多重试 5 次，并记录日志便于排查。"""
+        if self._layered is not None and self._mouse_hook is None:
+            try:
+                self._mouse_hook = install_mouse_hook(
+                    self._layered.hwnd, self._mouse_bridge)
+                if self._mouse_hook is None:
+                    self._hook_retry = getattr(self, "_hook_retry", 0) + 1
+                    if self._hook_retry <= 5:
+                        self._dbg("hook resume FAILED (%d/5), retry in 800ms"
+                                  % self._hook_retry)
+                        self.root.after(800, self._hook_resume)
+                    else:
+                        self._dbg("hook resume give up after 5 tries")
+                        self._hook_retry = 0
+                else:
+                    self._hook_retry = 0
+                    self._dbg("hook resume OK")
+            except Exception:
+                self._mouse_hook = None
+                self._hook_retry = getattr(self, "_hook_retry", 0) + 1
+                if self._hook_retry <= 5:
+                    self.root.after(800, self._hook_resume)
+
+    def _drain_mouse_queue(self):
+        """丢弃模态期间积压的鼠标消息（WNDPROC 仍会入队，避免模态
+        关闭后触发一次意外的点击/拖拽）。"""
+        while True:
+            try:
+                self._mouse_queue.get_nowait()
+            except Exception:
+                break
+
     def _mouse_bridge(self, msg, wparam, lparam):
         """分层窗口鼠标消息 → 队列（WNDPROC 回调内只入队，绝不调用 Tk！
 
@@ -1306,6 +1400,8 @@ class PetApp:
             self._expr_until = time.time() + duration
 
     def on_press(self, e):
+        self._dbg("on_press: x=%d y=%d win=(%d,%d)" % (
+            e.x_root, e.y_root, self.root.winfo_x(), self.root.winfo_y()))
         self._dragging = True
         # 按下即退出半隐藏：用户来拖它了（拖出是退出方式之一）
         self._exit_hide("drag")
@@ -1333,7 +1429,23 @@ class PetApp:
             user32 = ctypes.windll.user32
             pt = wintypes.POINT()
             user32.GetCursorPos(ctypes.byref(pt))
-            if not (user32.GetAsyncKeyState(0x01) & 0x8000):  # 左键已松开
+            # ---- 释放判定（双保险，修复「点完右键菜单后拖不动」）----
+            # 全局低级钩子拦截（return 1 消费）左键按下后，GetAsyncKeyState
+            # 读不到「按下」状态（输入流被钩子吞掉）→ 老代码按下瞬间就判定
+            # 为已松开 → 拖拽立即结束 = 拖不动。钩子侧已内置 lbutton_down
+            # 物理状态跟踪（回调开头无条件更新，与拦截与否无关），
+            # 以它为准；钩子缺失/未安装时退回 GetAsyncKeyState。
+            _hook = self._mouse_hook
+            if _hook is not None and _hook.lbutton_down:
+                _released = False       # 钩子确认左键仍按下 → 继续拖
+            else:
+                _ks = user32.GetAsyncKeyState(0x01)
+                _released = not (_ks & 0x8000)
+            if _released:
+                _ks = user32.GetAsyncKeyState(0x01)
+                self._dbg("drag_follow RELEASE: key=0x%X hook_down=%s pt=(%d,%d)" % (
+                    _ks, (_hook.lbutton_down if _hook is not None else None),
+                    pt.x, pt.y))
                 self.on_release(None)
                 return
             dx = pt.x - self._press_xy[0]
@@ -1366,6 +1478,7 @@ class PetApp:
                 self._click_job = None
 
     def on_release(self, e):
+        self._dbg("on_release")
         self._dragging = False
         # 松手时若人物实际边缘已贴上屏幕左/右边缘 → 进入半隐藏：旋转45°露头，
         # 半边身子藏屏外（检测「绘制的人物」边缘而非画布——画布有透明留白，
@@ -1386,7 +1499,16 @@ class PetApp:
 
     @staticmethod
     def _dbg(msg):
+        """调试日志（排障用）。默认关闭：磁盘 IO 触发杀软实时扫描，
+        Tk 主线程/鼠标事件路径上高频调用会造成整机卡顿。
+        排障时把模块级 _DBG_FILE_LOG 改为 True 即可打开（自带节流）。"""
+        if not _DBG_FILE_LOG:
+            return
         try:
+            now = time.time()
+            if now - _dbg_last_ts[0] < 0.25:   # 节流：最多每秒 4 条
+                return
+            _dbg_last_ts[0] = now
             with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "pet_events.log"), "a",
                       encoding="utf-8") as f:
@@ -1486,6 +1608,8 @@ class PetApp:
         """走路帧水平位移：向右走往右移、向左走往左移；撞到屏幕边缘进入半隐藏。"""
         if not self._walk_dir:
             return
+        if self._dragging:
+            return   # 拖动中冻结自动位移：拖拽与走路互不抢位置
         if not self.cfg.get("free_move", True):
             # 自由移动已关闭：只原地播放走路动作，不产生物理位移（防止到处乱跑）
             return
@@ -1545,6 +1669,8 @@ class PetApp:
         在 1/4 屏宽的带状区域内来回奔跑，不会越跑越远。"""
         if not self._run_dir or not self._run_seq:
             return
+        if self._dragging:
+            return   # 拖动中冻结奔跑位移：拖拽与奔跑互不抢位置（修「骑大狗时拖不动」）
         if not self.cfg.get("free_move", True):
             # 自由移动已关闭：原地播放奔跑动作，不产生位移
             return
@@ -1765,9 +1891,14 @@ class PetApp:
                 self.say("NORP Agent 没在线…双击我先启动它", expr="sad")
             return
         if text is None:
-            text = simpledialog.askstring("给 NORP Agent 传任务",
-                                          "输入要 NORP 执行的任务：\n例如「帮我在桌面创建一个待办清单.md」",
-                                          parent=self.root)
+            self._hook_pause()
+            try:
+                text = simpledialog.askstring("给 NORP Agent 传任务",
+                                              "输入要 NORP 执行的任务：\n例如「帮我在桌面创建一个待办清单.md」",
+                                              parent=self.root)
+            finally:
+                self._drain_mouse_queue()
+                self._hook_resume()
             if not text:
                 return
         if self._task_running:
@@ -1891,9 +2022,16 @@ class PetApp:
         self._poll_thread.start()
 
     def _poll_loop(self):
-        """长轮询 NORP 事件流，事件放入 _event_box 交给 UI 线程处理。"""
+        """后台线程：探测 API 在线状态 + 长轮询 NORP 事件流。
+
+        在线状态写回 self._api_online（简单赋值，原子），UI 线程只读
+        该标志、绝不自己发同步 HTTP 请求 —— 同步请求会卡 Tk 主线程，
+        NORP 关闭时连接被拖到超时（2s），期间 WH_MOUSE_LL 钩子回调
+        也无法响应 → 整机鼠标周期性卡顿。"""
         while not self._poll_stop.is_set():
-            if not self.check_norp_api():
+            online = self.check_norp_api()
+            self._api_online = online      # 后台线程探测 → UI 线程只读标志
+            if not online:
                 time.sleep(3)
                 continue
             ok, data = self.norp_request("GET", "/api/events?timeout=12", timeout=20)
@@ -1977,10 +2115,15 @@ class PetApp:
     def _ask_user_dialog(self, question):
         """NORP 需要用户确认/输入时，弹出对话框并把回答回传。"""
         try:
-            answer = simpledialog.askstring(
-                "NORP 需要你确认",
-                question[:200] + "\n\n（输入内容会回传给 NORP）",
-                parent=self.root)
+            self._hook_pause()
+            try:
+                answer = simpledialog.askstring(
+                    "NORP 需要你确认",
+                    question[:200] + "\n\n（输入内容会回传给 NORP）",
+                    parent=self.root)
+            finally:
+                self._drain_mouse_queue()
+                self._hook_resume()
             if answer is not None:
                 self.norp_request("POST", "/api/user_input", {"text": answer}, timeout=5)
                 self.say("你的回答已传给 NORP～", expr="happy")
@@ -2049,12 +2192,17 @@ class PetApp:
                     self.run_command(item["cmd"])
 
         def do_add():
-            name = simpledialog.askstring("添加指令", "指令名称：", parent=panel)
-            if not name:
-                return
-            cmd = simpledialog.askstring("添加指令", "要执行的命令（shell）：\n例如 notepad 或 start https://...", parent=panel)
-            if not cmd:
-                return
+            self._hook_pause()
+            try:
+                name = simpledialog.askstring("添加指令", "指令名称：", parent=panel)
+                if not name:
+                    return
+                cmd = simpledialog.askstring("添加指令", "要执行的命令（shell）：\n例如 notepad 或 start https://...", parent=panel)
+                if not cmd:
+                    return
+            finally:
+                self._drain_mouse_queue()
+                self._hook_resume()
             self.cfg.setdefault("commands", []).append({"name": name, "cmd": cmd})
             save_config(self.cfg)
             lb.insert(tk.END, f"⚡ {name}")
@@ -2141,10 +2289,19 @@ class PetApp:
         menu.add_command(label="⚙ 设置…", command=self.open_settings)
         menu.add_separator()
         menu.add_command(label="❌ 退出宠物", command=self.quit_app)
+        # 模态期间必须暂停全局钩子：钩子会把「点击宠物取消菜单」的
+        # 消息吞掉 → 菜单取消不掉 → 整个 Tk 卡死（点宠物无反应、
+        # 拖不动、动画冻结）。菜单关闭后再恢复钩子。
+        self._hook_pause()
         try:
             menu.tk_popup(e.x_root, e.y_root)
         finally:
-            menu.grab_release()
+            try:
+                menu.grab_release()
+            except Exception:
+                pass
+            self._drain_mouse_queue()
+            self._hook_resume()
 
     def toggle_follow_mouse(self):
         """切换跟随鼠标模式：开启后小人自动跟着光标移动。"""
@@ -2453,7 +2610,8 @@ class PetApp:
             if self._status_time_refs:
                 _now = time.time()
                 t_today, t_known = self._status_time_refs
-                secs_today = max(0, int(_now - self._today_launch))
+                _t0 = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+                secs_today = max(0, int(_now - max(self._today_launch, _t0)))
                 h, m = secs_today // 3600, secs_today % 3600 // 60
                 t_today.config(text=f"🕐 今天已陪伴 sensei 工作：{h} 小时 {m} 分")
                 secs_known = max(0, int(_now - self._first_launch))
@@ -2629,6 +2787,12 @@ class PetApp:
             except Exception:
                 pass
             self._layered = None
+        if self._mouse_hook is not None:
+            try:
+                self._mouse_hook.close()
+            except Exception:
+                pass
+            self._mouse_hook = None
         self.root.destroy()
 
 
