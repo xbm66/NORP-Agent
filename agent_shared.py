@@ -402,23 +402,48 @@ def build_full_messages(user_message: str, project_root: str,
 
 
 def build_tools_openai(plugin_manager, enable_web_search: bool) -> list:
-    """构建 OpenAI Chat Completions 格式的工具列表。"""
-    tools = list(BUILTIN_TOOLS)
+    """构建 OpenAI Chat Completions 格式的工具列表。
+
+    按工具名去重：内置工具与插件工具、以及不同插件之间的同名工具，
+    只保留第一次出现的定义，防止发送给 API 的工具列表出现重名。
+    """
+    tools = []
+    seen = set()
+    for t in BUILTIN_TOOLS:
+        name = t["function"]["name"]
+        if name in seen:
+            continue
+        seen.add(name)
+        tools.append(t)
     if plugin_manager:
-        plugin_tools = plugin_manager.get_tools()
-        tools.extend(plugin_tools)
+        for t in plugin_manager.get_tools():
+            name = t["function"]["name"]
+            if name in seen:
+                continue
+            seen.add(name)
+            tools.append(t)
     if not enable_web_search:
         tools = [t for t in tools if t["function"]["name"] != "web_search"]
     return tools
 
 
 def build_tools_anthropic(plugin_manager, enable_web_search: bool) -> list:
-    """构建 Anthropic 格式的工具列表。"""
+    """构建 Anthropic 格式的工具列表。
+
+    按工具名去重（关键修复）：Anthropic / DeepSeek-Anthropic 兼容端点
+    对重名工具严格校验，返回 400 'Tool names must be unique'。
+    这里按名字去重：原生 web_search → 内置工具 → 插件工具，
+    后出现的重名工具一律跳过。
+    """
     tools = [{"type": "web_search_20250305", "name": "web_search"}]
+    seen = {"web_search"}
     for t in BUILTIN_TOOLS:
         name = t["function"]["name"]
         if name == "web_search":
             continue
+        if name in seen:
+            continue
+        seen.add(name)
         func = t["function"]
         tools.append({
             "name": name,
@@ -428,8 +453,12 @@ def build_tools_anthropic(plugin_manager, enable_web_search: bool) -> list:
     if plugin_manager:
         for t in plugin_manager.get_tools():
             func = t["function"]
+            name = func.get("name", "")
+            if not name or name in seen:
+                continue
+            seen.add(name)
             tools.append({
-                "name": func["name"],
+                "name": name,
                 "description": func.get("description", ""),
                 "input_schema": func.get("parameters", {"type": "object", "properties": {}})
             })
