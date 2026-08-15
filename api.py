@@ -21,6 +21,8 @@ from plugin_system.manager import PluginManager
 from lifecycle_manager import get_lifecycle_manager
 from sandbox_pool import get_sandbox_pool
 from jailbreak_guard import scan_message, JAILBREAK_HARDENING_PROMPT
+from ssh_service import SshService
+from remote_server import RemoteServer, lan_ips
 
 # 应用基础目录（main.py / api.py 所在目录，也是 official_plugins/ 的父目录）
 if getattr(sys, 'frozen', False):
@@ -210,7 +212,7 @@ class AgentAPI:
         self._attention_callback = None
 
         # Create default session
-        self._create_session_internal()
+        self._active_session_id = self._create_session_internal()
 
         # ── Plugin system ──
         cfg = self.config_manager.load()
@@ -229,6 +231,23 @@ class AgentAPI:
             self.plugin_manager.set_plugin_dirs([])
 
         self._ensure_project_root()
+
+        # ── SSH 运维引擎（GUI 面板 + norp_ssh 插件共享 hosts.json）──
+        self.ssh = SshService(app_dir)
+
+        # ── 移动端远程控制（默认不启用：remote_host=127.0.0.1）──
+        self.remote_server = None
+        self.remote_enabled = False
+        self.remote_host = "127.0.0.1"
+        self.remote_port = 8090
+        cfg = self.config_manager.load()
+        self.remote_enabled = bool(cfg.get("remote_enabled", False))
+        self.remote_host = str(cfg.get("remote_host", "127.0.0.1")).strip() or "127.0.0.1"
+        self.remote_port = int(cfg.get("remote_port", 8090) or 8090)
+        if self.remote_enabled:
+            self.remote_server = RemoteServer(self, self.remote_host, self.remote_port)
+            if not self.remote_server.start():
+                self.remote_server = None
 
     def _create_session_internal(self, workspace: str = "") -> str:
         """Create a new session and return its ID (caller must hold lock)."""
@@ -319,6 +338,16 @@ class AgentAPI:
                 "message_count": len(s.current_messages),
             }
 
+    def get_active_session(self) -> dict:
+        """返回当前活跃会话（最近一次 send_message 的会话），供移动端对齐桌面端。"""
+        with self._sessions_lock:
+            s = self.sessions.get(getattr(self, "_active_session_id", None))
+            if s is None and self.sessions:
+                s = next(iter(self.sessions.values()))
+            if s is None:
+                return {"id": "", "title": ""}
+            return {"id": s.session_id, "title": s.title}
+
     def _get_session(self, session_id: str) -> Session:
         """Get a session by ID. Falls back to first available if not found."""
         with self._sessions_lock:
@@ -396,6 +425,8 @@ class AgentAPI:
 
     def send_message(self, session_id: str, text: str) -> str:
         session = self._get_session(session_id)
+        # 记录最近活跃会话，供移动端对齐桌面端使用
+        self._active_session_id = session.session_id
 
         # ── 越狱/提示词注入检测 ──
         cfg = self.config_manager.load()
@@ -451,6 +482,12 @@ class AgentAPI:
             return "error:" + translate_error(e)
 
         session.current_messages.append({"role": "user", "content": text})
+
+        # 把用户消息也广播到事件流（M:），让桌面端流式渲染其它客户端（如移动端）发的消息
+        try:
+            session.event_queue.put("M:" + text)
+        except Exception:
+            pass
 
         print("[DEBUG] session:", session.session_id, "current_messages 长度:", len(session.current_messages))
         print("[DEBUG] memory_history 长度:", len(session.memory_history))
@@ -908,6 +945,100 @@ class AgentAPI:
 
     def get_plugin_dirs(self) -> list:
         return self.plugin_manager.plugin_dirs
+
+    # ═══════════════════════════════════════════════════════════════
+    #  SSH 运维（GUI 面板调用；与 norp_ssh 插件共享 hosts.json）
+    # ═══════════════════════════════════════════════════════════════
+    def ssh_list_hosts(self, query: str = "") -> list:
+        return self.ssh.list_hosts(query)
+
+    def ssh_add_host(self, entry: dict) -> dict:
+        return self.ssh.add_host(entry)
+
+    def ssh_remove_host(self, alias: str) -> dict:
+        return self.ssh.remove_host(alias)
+
+    def ssh_import_config(self) -> dict:
+        return self.ssh.import_config()
+
+    def ssh_test_host(self, alias: str, timeout: int = 12) -> dict:
+        return self.ssh.test(alias, timeout)
+
+    def ssh_exec_cmd(self, alias: str, command: str, timeout: int = 60) -> dict:
+        return self.ssh.exec_cmd(alias, command, timeout)
+
+    def ssh_upload_file(self, alias: str, local_path: str, remote_path: str) -> dict:
+        return self.ssh.upload(alias, local_path, remote_path)
+
+    def ssh_download_file(self, alias: str, remote_path: str, local_path: str) -> dict:
+        return self.ssh.download(alias, remote_path, local_path)
+
+    def ssh_tunnel_start(self, alias: str, remote_port: int,
+                         remote_host: str = "127.0.0.1", local_port: int = 0) -> dict:
+        return self.ssh.tunnel_start(alias, remote_port, remote_host, local_port)
+
+    def ssh_tunnel_list(self) -> list:
+        return self.ssh.tunnel_list()
+
+    def ssh_tunnel_stop(self, tunnel_id: str) -> dict:
+        return self.ssh.tunnel_stop(tunnel_id)
+
+    def ssh_tunnel_stop_all(self) -> dict:
+        return self.ssh.tunnel_stop_all()
+
+    def ssh_cluster_run(self, command: str, aliases: list = None, environment: str = "",
+                        tags: list = None, timeout: int = 60, max_workers: int = 8) -> list:
+        return self.ssh.cluster(command, aliases, environment, tags, timeout, max_workers)
+
+    def ssh_terminal_open(self, alias: str) -> dict:
+        return self.ssh.terminal_open(alias)
+
+    def ssh_terminal_read(self, terminal_id: str) -> dict:
+        return self.ssh.terminal_read(terminal_id)
+
+    def ssh_terminal_write(self, terminal_id: str, data: str) -> dict:
+        return self.ssh.terminal_write(terminal_id, data)
+
+    def ssh_terminal_close(self, terminal_id: str) -> dict:
+        return self.ssh.terminal_close(terminal_id)
+
+    def ssh_terminal_list(self) -> list:
+        return self.ssh.terminal_list()
+
+    # ═══════════════════════════════════════════════════════════════
+    #  移动端远程控制
+    # ═══════════════════════════════════════════════════════════════
+    def get_remote_status(self) -> dict:
+        return {
+            "enabled": self.remote_enabled,
+            "host": self.remote_host,
+            "port": self.remote_port,
+            "running": self.remote_server is not None,
+            "lan_accessible": self.remote_host in ("0.0.0.0", "::"),
+            "lan_ips": lan_ips(),
+        }
+
+    def get_lan_ips(self) -> list:
+        return lan_ips()
+
+    def get_remote_qr(self, url: str) -> str:
+        import base64
+        import io
+        try:
+            import qrcode
+        except Exception:
+            return ""
+        try:
+            qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M,
+                               box_size=6, border=2)
+            qr.add_data(url or "")
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception:
+            return ""
 
     def _resolve_plugin_dirs(self, dirs: list) -> list:
         """Normalise and deduplicate plugin directories by realpath.
