@@ -6,7 +6,7 @@ BUILTIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取文件内容。可指定行范围只读取需要的代码片段，节省 token。⚠️ 全量读取 >100KB 文件默认被拒绝（返回「文件过大，仅能部分读取」），须用 start_line/end_line 按范围读取，或请求用户开启全量读取开关。大文件先用 search_large_file / surgical_scan 定位行号。",
+            "description": "读取文件内容。可指定行范围只读取需要的代码片段，节省 token。⚠️ 全量读取 >100KB 文件默认被拒绝（返回「文件过大，仅能部分读取」），须用 start_line/end_line 按范围读取，或请求用户开启全量读取开关。大文件先用 search_large_file / surgical_scan 定位行号。📷 也支持读取图片（png/jpg/webp 等）返回视觉描述：需在设置中开启视觉 API 并配置 provider（openai_compatible/anthropic/llama_cpp）。",
             "parameters": {
                 "type": "object",
                 "properties": {

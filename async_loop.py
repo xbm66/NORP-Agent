@@ -15,6 +15,7 @@ from anthropic import Anthropic as AnthropicClient
 
 from event_queue import EventQueue
 from async_executor import AsyncToolExecutor
+from debug_logger import get_debug_logger
 from lifecycle_manager import LifecycleManager, TaskLifecycle, get_lifecycle_manager
 from sandbox_pool import get_sandbox_pool
 from file_io_queue import get_file_io_queue
@@ -31,6 +32,7 @@ from agent_shared import (
     is_loopback_url,
     plugin_has_tool,
 )
+from plugin_system.approval import ApprovalPolicy
 
 CHARS_PER_TOKEN = 3
 
@@ -40,7 +42,16 @@ LOCAL_NUM_CTX_MIN = 8192
 
 # ★ 僵尸进程防护：单次 API 请求最大等待时间（秒）
 # 超过此时间仍未收到任何 chunk，视为网络挂起，触发超时退出
-API_REQUEST_TIMEOUT = 180.0  # 3 分钟
+# 默认 180s（3 分钟）；可由用户在 30s ~ 3600s（60 分钟）之间配置
+API_REQUEST_TIMEOUT_DEFAULT = 180.0
+
+
+def format_api_timeout(seconds: float) -> str:
+    """将 API 超时秒数格式化为可读字符串（如 "3 min" / "30s"）。"""
+    t = int(seconds)
+    if t >= 60 and t % 60 == 0:
+        return f"{t // 60} min"
+    return f"{t}s"
 
 
 def estimate_tokens(text: str) -> int:
@@ -71,10 +82,12 @@ class AsyncAgentLoop:
         max_steps: int = 128,
         enable_web_search: bool = False,
         confirm_write_delete: bool = True,
+        approval_config: dict = None,
         temperature: float = 1.0,
         think_level: str = "高",
         max_tokens: int = 32767,
         task_timeout: int = 0,
+        api_request_timeout: float = 180.0,
         plugin_manager=None,
         use_responses_api: bool = False,
         allow_full_read_large_files: bool = False,
@@ -89,10 +102,13 @@ class AsyncAgentLoop:
         self.max_steps = max_steps
         self.enable_web_search = enable_web_search
         self.confirm_write_delete = confirm_write_delete
+        # ★ P0-8 人工审批安全层：分级审批策略（write / delete / exec）
+        self.approval = ApprovalPolicy(approval_config)
         self.temperature = temperature
         self.think_level = think_level
         self.max_tokens = max_tokens
         self.task_timeout = task_timeout
+        self.api_request_timeout = api_request_timeout
         self.custom_system_prompt = custom_system_prompt
 
         # 异步事件
@@ -197,6 +213,9 @@ class AsyncAgentLoop:
 
         # 事件队列
         self.event_queue = event_queue
+
+        # 调试收集器（延迟到 run() 时初始化，避免 app_dir 未就绪）
+        self._debug_logger = None
 
         # 插件
         self.plugin_manager = plugin_manager
@@ -442,17 +461,74 @@ class AsyncAgentLoop:
             return ""
         return self._user_reply_value
 
-    async def _confirm_write_delete(self, tool_name: str, tool_args: dict) -> bool:
-        """弹出确认对话框。"""
+    async def _confirm_write_delete(self, tool_name: str, tool_args: dict,
+                                    is_plugin: bool = False) -> bool:
+        """弹出人工审批确认对话框（P0-8 分级审批统一入口）。
+
+        is_plugin 为 True 时表示该工具来自插件系统（插件控制面板审批），
+        前端可根据该标记在确认框中展示「插件工具」标识。
+
+        特殊返回值约定：
+        - ``__confirm__``        ：确认放行
+        - ``__confirm_no_more__``：确认放行 + 持久化关闭「原生工具确认」
+          （对应弹窗上的「不再显示」按钮，仅原生工具弹窗可见）
+        - 其它任何输入           ：视为取消
+        """
         confirm_data = json.dumps({
             "tool": tool_name,
-            "path": tool_args.get("path", "")
+            "path": tool_args.get("path", ""),
+            "command": tool_args.get("command", tool_args.get("cmd", "")),
+            "is_plugin": is_plugin,
         }, ensure_ascii=False)
         self.event_queue.put(f"WC:{confirm_data}")
         reply = await self._wait_for_user_input()
         if self._stop_event.is_set():
             return False
-        return reply.strip() == "__confirm__"
+        reply = reply.strip()
+        if reply == "__confirm_no_more__":
+            # 「不再显示」：本次放行；若是原生工具（非插件），
+            # 持久化关闭原生工具确认总开关，后续弹窗不再出现。
+            if not is_plugin:
+                self._disable_native_confirm()
+            return True
+        return reply == "__confirm__"
+
+    def _refresh_approval(self):
+        """每次确认弹窗前重新读取配置，保证开关即时生效。
+
+        修复：此前 ApprovalPolicy 仅在会话创建时快照一次配置，
+        单次对话中修改「原生工具确认 / 插件审批」开关不会生效，
+        必须等下一个完整工作流才会重新检测。现在每次检查前都从
+        config.json 重读并重建策略，开关改动（含「不再显示」）
+        下一次工具调用立即生效。
+        """
+        try:
+            cfg_path = os.path.join(self.app_dir, "config.json")
+            if os.path.exists(cfg_path):
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+            else:
+                cfg = {}
+        except Exception:
+            cfg = {}
+        try:
+            self.approval = ApprovalPolicy(cfg)
+        except Exception:
+            pass
+
+    def _disable_native_confirm(self):
+        """「不再显示」持久化：关闭原生工具确认总开关（设置面板配置）。"""
+        try:
+            cfg_path = os.path.join(self.app_dir, "config.json")
+            cfg = {}
+            if os.path.exists(cfg_path):
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+            cfg["native_confirm_enabled"] = False
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
 
     # ═══════════════════════════════════════════════════════════════
     #  计时
@@ -515,6 +591,13 @@ class AsyncAgentLoop:
             "tool_call_tokens": self._total_usage["tool_call_tokens"]
         }, ensure_ascii=False)
         self.event_queue.put(f"U:{usage_event}")
+        # ── 调试收集器：更新 token / 事件队列快照 ──
+        try:
+            if self._debug_logger:
+                self._debug_logger.update_tokens(self._total_usage)
+                self._debug_logger.update_event_queue_size(self.event_queue.size)
+        except Exception:
+            pass
 
     # ═══════════════════════════════════════════════════════════════
     #  主循环
@@ -533,6 +616,19 @@ class AsyncAgentLoop:
         self._total_pause_duration = 0.0
         self._pause_start_time = 0.0
         self._stop_event.clear()
+
+        # ── 调试收集器：开始记录任务 ──
+        try:
+            self._debug_logger = get_debug_logger(self.app_dir)
+            self._debug_logger.start_task(
+                task_id=getattr(self.executor, "task_id", ""),
+                user_message=user_message,
+                project_root=self.project_root,
+            )
+            self._debug_logger.update_tokens(self._total_usage)
+            self._debug_logger.update_event_queue_size(self.event_queue.size)
+        except Exception:
+            self._debug_logger = None
 
         # 记录事件循环引用，供 stop() 线程安全调度
         self._agent_loop = asyncio.get_running_loop()
@@ -583,6 +679,15 @@ class AsyncAgentLoop:
                 })
         self._conversation_history = conv
 
+        # ── 调试收集器：任务结束，写入 "{日期+时间}_debug.json" ──
+        try:
+            if self._debug_logger:
+                self._debug_logger.update_tokens(self._total_usage)
+                self._debug_logger.update_event_queue_size(self.event_queue.size)
+                self._debug_logger.finish_task(result)
+        except Exception:
+            pass
+
         return result
 
     # ═══════════════════════════════════════════════════════════════
@@ -615,6 +720,13 @@ class AsyncAgentLoop:
                 return "timeout"
 
             self._step_count = step + 1
+
+            # ── 调试收集器：标记当前步骤 ──
+            try:
+                if self._debug_logger:
+                    self._debug_logger.set_current_step(self._step_count)
+            except Exception:
+                pass
 
             # ── Hook: before_step（与同步版对齐，供 context_retriever 注入索引状态）──
             if self.plugin_manager:
@@ -658,6 +770,23 @@ class AsyncAgentLoop:
                     self.event_queue.put(f"C:{cmd_info}")
 
             messages.append(assistant_msg)
+
+            # ── 调试收集器：记录 ReAct 步骤（思考 + 行动，观察稍后追加）──
+            try:
+                if self._debug_logger:
+                    tc_formatted = [
+                        {"name": tc["function"]["name"],
+                         "arguments": tc["function"]["arguments"]}
+                        for tc in tool_calls_list
+                    ]
+                    self._debug_logger.record_react_step(
+                        step=self._step_count,
+                        reasoning=full_reasoning,
+                        tool_calls=tc_formatted,
+                        observations=[],
+                    )
+            except Exception:
+                pass
 
             if not tool_calls_list:
                 if full_content:
@@ -811,10 +940,10 @@ class AsyncAgentLoop:
         try:
             return await asyncio.wait_for(
                 loop.run_in_executor(None, _sync_stream),
-                timeout=API_REQUEST_TIMEOUT,
+                timeout=self.api_request_timeout,
             )
         except asyncio.TimeoutError:
-            self.event_queue.put("E:API request timeout (3 min) — network may be unreachable")
+            self.event_queue.put(f"E:API request timeout ({format_api_timeout(self.api_request_timeout)}) — network may be unreachable")
             self._stop_event.set()
             return {
                 "reasoning": "",
@@ -829,6 +958,16 @@ class AsyncAgentLoop:
 
     # 插件工具执行超时（秒），防止插件阻塞事件循环导致挂起
     PLUGIN_TOOL_TIMEOUT = 120.0
+
+    def _is_plugin_tool(self, tool_name: str) -> bool:
+        """判断工具是否由插件提供（插件工具不经 async_executor 执行）。"""
+        if not self.plugin_manager:
+            return False
+        try:
+            plugin_names = {t["function"]["name"] for t in self.plugin_manager.get_tools()}
+            return tool_name in plugin_names
+        except Exception:
+            return False
 
     async def _execute_tool_async(self, tool_name: str, tool_args: dict) -> str:
         """Execute a tool, routing to plugin or built-in executor (async-safe).
@@ -911,10 +1050,21 @@ class AsyncAgentLoop:
                 self.executor.log_tool_call(step + 1, tool_name, tool_args,
                                             f"user replied: {reply[:200]}")
                 self._add_tool_tokens(tool_name, reply)
+                # ── 调试收集器：记录观察结果 ──
+                try:
+                    if self._debug_logger:
+                        self._debug_logger.append_observation(step + 1, tool_name, reply)
+                except Exception:
+                    pass
             else:
-                if (tool_name in ("write_file", "delete_file", "replace_in_file")
-                        and self.confirm_write_delete):
-                    if not await self._confirm_write_delete(tool_name, tool_args):
+                # ★ P0-8 审批拆分：插件工具走「插件工具调用审批」，原生工具走「原生工具确认」
+                # ★ 每次检查前刷新审批策略：开关改动（含「不再显示」）即时生效
+                self._refresh_approval()
+                is_plugin = plugin_has_tool(self.plugin_manager, tool_name)
+                needs_approval, _approval_level = self.approval.requires_approval(
+                    tool_name, is_plugin=is_plugin)
+                if needs_approval:
+                    if not await self._confirm_write_delete(tool_name, tool_args, is_plugin=is_plugin):
                         if self._stop_event.is_set():
                             self.event_queue.put("E:Task stopped by user")
                             self.event_queue.signal_finish()
@@ -929,12 +1079,27 @@ class AsyncAgentLoop:
                         continue
 
                 # ★ 异步执行工具（先路由插件，再回退内置执行器）
+                _tool_start = time.time()
                 result = await self._execute_tool_async(tool_name, tool_args)
+                _tool_elapsed_ms = (time.time() - _tool_start) * 1000
 
                 # ── Hook: after_tool_call ──
                 if self.plugin_manager:
                     result = self.plugin_manager.fire_after_tool_call(
                         tool_name, tool_args, result)
+
+                # ── 调试收集器：记录观察结果 + 插件工具耗时 ──
+                try:
+                    if self._debug_logger:
+                        self._debug_logger.append_observation(step + 1, tool_name, result)
+                        # 插件工具不经 async_executor（其内部已记录内置工具），
+                        # 这里补记插件工具的耗时诊断卡。
+                        if self._is_plugin_tool(tool_name):
+                            self._debug_logger.record_tool_call(
+                                tool=tool_name, args=tool_args, result=result,
+                                elapsed_ms=_tool_elapsed_ms, step=step + 1)
+                except Exception:
+                    pass
 
                 messages.append({
                     "role": "tool",
@@ -975,6 +1140,13 @@ class AsyncAgentLoop:
                 return "timeout"
 
             self._step_count = step + 1
+
+            # ── 调试收集器：标记当前步骤 ──
+            try:
+                if self._debug_logger:
+                    self._debug_logger.set_current_step(self._step_count)
+            except Exception:
+                pass
 
             # ── Hook: before_step（与同步版对齐，供 context_retriever 注入索引状态）──
             if self.plugin_manager:
@@ -1044,6 +1216,23 @@ class AsyncAgentLoop:
                     self.event_queue.put(f"C:{cmd_info}")
 
             messages.append(assistant_msg)
+
+            # ── 调试收集器：记录 ReAct 步骤（思考 + 行动，观察稍后追加）──
+            try:
+                if self._debug_logger:
+                    tc_formatted = [
+                        {"name": tc["function"]["name"],
+                         "arguments": tc["function"]["arguments"]}
+                        for tc in tool_calls_list
+                    ]
+                    self._debug_logger.record_react_step(
+                        step=self._step_count,
+                        reasoning=full_reasoning,
+                        tool_calls=tc_formatted,
+                        observations=[],
+                    )
+            except Exception:
+                pass
 
             if not tool_calls_list:
                 if full_content:
@@ -1156,10 +1345,10 @@ class AsyncAgentLoop:
         try:
             return await asyncio.wait_for(
                 loop.run_in_executor(None, _sync_responses),
-                timeout=API_REQUEST_TIMEOUT,
+                timeout=self.api_request_timeout,
             )
         except asyncio.TimeoutError:
-            self.event_queue.put("E:Responses API request timeout (3 min) — network may be unreachable")
+            self.event_queue.put(f"E:Responses API request timeout ({format_api_timeout(self.api_request_timeout)}) — network may be unreachable")
             self._stop_event.set()
             return {
                 "reasoning": "",
@@ -1208,6 +1397,13 @@ class AsyncAgentLoop:
 
             self._step_count = step + 1
 
+            # ── 调试收集器：标记当前步骤 ──
+            try:
+                if self._debug_logger:
+                    self._debug_logger.set_current_step(self._step_count)
+            except Exception:
+                pass
+
             # ── Hook: before_step（与同步版对齐；Anthropic 格式消息无 system 角色，
             #   注入型钩子会自行跳过，返回值在此路径被忽略）──
             if self.plugin_manager:
@@ -1239,6 +1435,22 @@ class AsyncAgentLoop:
                 estimated_input = sum(len(str(m.get("content", ""))) for m in anthropic_messages) // 4
                 estimated_output = len(full_content) // 4
                 self._update_usage(estimated_input, estimated_output)
+
+            # ── 调试收集器：记录 ReAct 步骤（思考 + 行动，观察稍后追加）──
+            try:
+                if self._debug_logger:
+                    tu_formatted = [
+                        {"name": tu["name"], "arguments": json.dumps(tu["input"], ensure_ascii=False)}
+                        for tu in tool_uses
+                    ]
+                    self._debug_logger.record_react_step(
+                        step=self._step_count,
+                        reasoning=full_reasoning,
+                        tool_calls=tu_formatted,
+                        observations=[],
+                    )
+            except Exception:
+                pass
 
             if not tool_uses:
                 if full_content:
@@ -1302,10 +1514,21 @@ class AsyncAgentLoop:
                         "content": reply
                     })
                     self._add_tool_tokens(tool_name, reply)
+                    # ── 调试收集器：记录观察结果 ──
+                    try:
+                        if self._debug_logger:
+                            self._debug_logger.append_observation(self._step_count, tool_name, reply)
+                    except Exception:
+                        pass
                 else:
-                    if (tool_name in ("write_file", "delete_file", "replace_in_file")
-                            and self.confirm_write_delete):
-                        if not await self._confirm_write_delete(tool_name, tool_input):
+                    # ★ P0-8 审批拆分：插件工具走「插件工具调用审批」，原生工具走「原生工具确认」
+                    # ★ 每次检查前刷新审批策略：开关改动（含「不再显示」）即时生效
+                    self._refresh_approval()
+                    is_plugin = plugin_has_tool(self.plugin_manager, tool_name)
+                    needs_approval, _approval_level = self.approval.requires_approval(
+                        tool_name, is_plugin=is_plugin)
+                    if needs_approval:
+                        if not await self._confirm_write_delete(tool_name, tool_input, is_plugin=is_plugin):
                             if self._stop_event.is_set():
                                 return "stopped"
                             cancel_msg = "User cancelled the operation."
@@ -1317,12 +1540,25 @@ class AsyncAgentLoop:
                             continue
 
                     # ★ 异步执行工具（先路由插件，再回退内置执行器）
+                    _tool_start = time.time()
                     result_text = await self._execute_tool_async(tool_name, tool_input)
+                    _tool_elapsed_ms = (time.time() - _tool_start) * 1000
 
                     # ── Hook: after_tool_call ──
                     if self.plugin_manager:
                         result_text = self.plugin_manager.fire_after_tool_call(
                             tool_name, tool_input, result_text)
+
+                    # ── 调试收集器：记录观察结果 + 插件工具耗时 ──
+                    try:
+                        if self._debug_logger:
+                            self._debug_logger.append_observation(self._step_count, tool_name, result_text)
+                            if self._is_plugin_tool(tool_name):
+                                self._debug_logger.record_tool_call(
+                                    tool=tool_name, args=tool_input, result=result_text,
+                                    elapsed_ms=_tool_elapsed_ms, step=self._step_count)
+                    except Exception:
+                        pass
 
                     tool_results.append({
                         "type": "tool_result",
@@ -1447,10 +1683,10 @@ class AsyncAgentLoop:
         try:
             return await asyncio.wait_for(
                 loop.run_in_executor(None, _sync_anthropic),
-                timeout=API_REQUEST_TIMEOUT,
+                timeout=self.api_request_timeout,
             )
         except asyncio.TimeoutError:
-            self.event_queue.put("E:Anthropic API request timeout (3 min) — network may be unreachable")
+            self.event_queue.put(f"E:Anthropic API request timeout ({format_api_timeout(self.api_request_timeout)}) — network may be unreachable")
             self._stop_event.set()
             return {
                 "reasoning": "",

@@ -209,6 +209,7 @@
     </div>
     <div class="btn-group">
         <button id="msg-center-btn" data-i18n="messages">📨 消息<span id="msg-center-badge"></span></button>
+        <button id="plugins-btn" data-i18n="plugins_panel_btn">🔌 插件</button>
         <button id="about-btn" data-i18n="about">About</button>
         <button id="balance-btn" data-i18n="balance">Balance</button>
         <button id="key-btn" data-i18n="key">Key</button>
@@ -285,9 +286,11 @@
         <h2 id="confirm-write-title">Confirm Operation</h2>
         <p id="confirm-write-message"></p>
         <p id="confirm-write-detail"></p>
+        <p id="confirm-write-nomore-hint" style="font-size:12px;color:#888;margin:6px 0 0 0;display:none;" data-i18n="confirm_no_more_hint"></p>
         <div class="btn-row" style="justify-content:center;gap:16px;">
-            <button class="btn-danger" id="confirm-write-cancel-btn">Cancel</button>
-            <button class="btn-primary" id="confirm-write-confirm-btn">Confirm</button>
+            <button class="btn-danger" id="confirm-write-cancel-btn" data-i18n="cancel">Cancel</button>
+            <button class="btn-secondary" id="confirm-write-nomore-btn" style="display:none;" data-i18n="confirm_no_more">Don't ask again</button>
+            <button class="btn-primary" id="confirm-write-confirm-btn" data-i18n="confirm_btn">Confirm</button>
         </div>
     </div>
 </div>
@@ -359,11 +362,24 @@
         </div>
         <div class="checkbox-desc" data-i18n="web_search_desc">Enable web search for real-time information. Agent can call web_search tool.</div>
 
+        <h3 style="margin-top:12px;" data-i18n="native_confirm_section">🛡️ 原生工具确认</h3>
         <div class="checkbox-row">
-            <input type="checkbox" id="cfg-confirm-write-delete">
-            <label for="cfg-confirm-write-delete" data-i18n="confirm_write">Confirm Before Write/Delete</label>
+            <input type="checkbox" id="cfg-native-confirm-enabled">
+            <label for="cfg-native-confirm-enabled" data-i18n="native_confirm_enabled">启用原生工具确认（默认开启）</label>
         </div>
-        <div class="checkbox-desc" data-i18n="confirm_write_desc">When enabled, a confirmation dialog will appear before writing or deleting files.</div>
+        <div class="checkbox-desc" data-i18n="native_confirm_desc">原生内置工具在执行写入 / 删除 / 命令前弹出确认。关闭总开关后，以下子项均不生效。插件工具的审批请在「插件控制面板」配置。</div>
+        <div class="checkbox-row">
+            <input type="checkbox" id="cfg-native-confirm-write">
+            <label for="cfg-native-confirm-write" data-i18n="native_confirm_write">写入/替换文件需确认</label>
+        </div>
+        <div class="checkbox-row">
+            <input type="checkbox" id="cfg-native-confirm-delete">
+            <label for="cfg-native-confirm-delete" data-i18n="native_confirm_delete">删除文件需确认</label>
+        </div>
+        <div class="checkbox-row">
+            <input type="checkbox" id="cfg-native-confirm-exec">
+            <label for="cfg-native-confirm-exec" data-i18n="native_confirm_exec">命令/子进程执行需确认</label>
+        </div>
 
         <label data-i18n="queue_limit">Event Queue Limit</label>
         <input type="number" id="cfg-queue-size" min="1" max="1024" value="200">
@@ -375,6 +391,20 @@
         <label data-i18n="task_timeout">Task Timeout (seconds, 0 = disable)</label>
         <input type="number" id="cfg-task-timeout" min="0" max="3600" step="30" value="0">
         <span style="font-size:10px;color:#888;" data-i18n="task_timeout_hint">Timeout pauses while waiting for user input (ask/confirm dialogs).</span>
+
+        <label data-i18n="api_request_timeout">API Request Timeout (interrupt)</label>
+        <select id="cfg-api-request-timeout">
+            <option value="30">30s</option>
+            <option value="60">1 min</option>
+            <option value="120">2 min</option>
+            <option value="180">3 min (default)</option>
+            <option value="300">5 min</option>
+            <option value="600">10 min</option>
+            <option value="900">15 min</option>
+            <option value="1800">30 min</option>
+            <option value="3600">60 min</option>
+        </select>
+        <span style="font-size:10px;color:#888;" data-i18n="api_request_timeout_hint">A single API request is interrupted if no data arrives for longer than this. Range 30s ~ 60min, default 3min.</span>
 
         <h3 style="margin-top:12px;" data-i18n="memory_section">💾 Memory (Conversation History)</h3>
         <div class="checkbox-row">
@@ -396,57 +426,8 @@
         <span id="memory-status" style="font-size:11px;color:#888;margin-left:8px;"></span>
 
         <h3 style="margin-top:12px;" data-i18n="plugins_section">🔌 Plugins</h3>
-        <div class="checkbox-row">
-            <input type="checkbox" id="cfg-plugins-enabled">
-            <label for="cfg-plugins-enabled" data-i18n="plugins_enable">Enable External Plugins</label>
-        </div>
-        <div class="checkbox-desc" data-i18n="plugins_enable_desc">Load plugins from the directories listed below. Disable to use built-in tools only.</div>
-
-        <div id="plugin-dirs-section">
-        <label data-i18n="plugin_dirs">Plugin Directories</label>
-        <div id="plugin-dirs-list" style="margin-bottom:6px;"></div>
-        <div class="flex-row" style="margin-bottom:4px;">
-            <button class="btn-small" id="add-plugin-dir" data-i18n="add_dir">+ Add Directory</button>
-            <button class="btn-small" id="reload-plugins-btn" style="margin-left:4px;" data-i18n="reload_plugins">🔄 Reload</button>
-        </div>
-        <div id="plugin-list" style="margin-top:6px;font-size:12px;max-height:150px;overflow-y:auto;background:#f8f8f8;border-radius:4px;padding:6px;"></div>
-        </div>
-
-        <div id="plugin-security-section">
-        <h3 style="margin-top:12px;" data-i18n="plugin_security_section">🔒 Plugin Security</h3>
-        <div class="checkbox-row">
-            <select id="cfg-security-audit" style="flex:1;">
-                <option value="off" data-i18n="security_audit_off">Off — Skip all checks</option>
-                <option value="warn" data-i18n="security_audit_warn">Warn — Log issues but allow loading</option>
-                <option value="block" data-i18n="security_audit_block">Block — Reject plugins with critical issues</option>
-            </select>
-        </div>
-        <div class="checkbox-desc" data-i18n="security_audit_desc"><b>Code Audit:</b> Scans plugin source for dangerous patterns (shell exec, eval, ctypes, etc.) before loading.</div>
-
-        <div class="checkbox-row">
-            <select id="cfg-security-import-restrict" style="flex:1;">
-                <option value="off" data-i18n="security_import_off">Off — No import restrictions</option>
-                <option value="safe" data-i18n="security_import_safe">Safe — Block known dangerous modules</option>
-                <option value="strict" data-i18n="security_import_strict">Strict — Only allow safe built-in modules</option>
-            </select>
-        </div>
-        <div class="checkbox-desc" data-i18n="security_import_desc"><b>Import Restriction:</b> Limits which Python modules plugins can import. "Strict" allows only json, re, datetime, etc.</div>
-
-        <div class="checkbox-row">
-            <input type="checkbox" id="cfg-security-permissions">
-            <label for="cfg-security-permissions" data-i18n="security_permissions">Require Permission Declarations</label>
-        </div>
-        <div class="checkbox-desc" data-i18n="security_permissions_desc">When enabled, plugins must declare required capabilities (process, network, file_write, file_read) in their <code>manifest.json</code> → <code>permissions</code> field.</div>
-
-        <div class="checkbox-row">
-            <input type="checkbox" id="cfg-security-resource-limit">
-            <label for="cfg-security-resource-limit" data-i18n="security_resource">Enable Resource Limits</label>
-        </div>
-        <div class="checkbox-desc" data-i18n="security_resource_desc">Restrict CPU time (30s) and memory (512MB) per plugin during loading. Uses OS-level limits (Unix: setrlimit; Windows: best-effort).</div>
-
-        <div id="plugin-security-audit-summary" style="margin-top:8px;font-size:11px;color:#666;background:#f8f8f8;border-radius:4px;padding:6px;max-height:120px;overflow-y:auto;display:none;"></div>
-        </div>
-        <!-- end plugin-security-section -->
+        <button class="btn-small" id="open-plugin-panel-btn" style="margin-top:8px;" data-i18n="plugins_open_panel">🔌 打开插件控制面板</button>
+        <div class="checkbox-desc" style="color:#856404;background:#fff8e1;border:1px solid #ffcc80;border-radius:4px;padding:8px;margin-top:8px;" data-i18n="plugins_migrated_hint">插件启用开关、插件目录、插件列表、安全审计、签名校验、网络策略与人工审批等已迁移至独立的「插件控制面板」。</div>
 
         <!-- NORP 安全系统 -->
         <h3 style="margin-top:12px;" data-i18n="norp_safety_section">🛡️ NORP Safety System</h3>
@@ -519,6 +500,28 @@
             </div>
         </div>
         <!-- end 自定义系统提示词 -->
+
+        <!-- 视觉 API（开放接口） -->
+        <h3 style="margin-top:12px;" data-i18n="vision_section">👁️ 视觉 API（开发者接口）</h3>
+        <div id="vision-section" style="margin-bottom:8px;">
+            <div class="checkbox-row">
+                <input type="checkbox" id="cfg-vision-enabled">
+                <label for="cfg-vision-enabled" data-i18n="vision_enable">启用视觉 API</label>
+            </div>
+            <div class="checkbox-desc" data-i18n="vision_enable_desc">开启后，上传的图片/视频将交给视觉层处理。多模态视觉模型由开发者自行接入。</div>
+            <div id="vision-config" style="display:none;margin-top:8px;">
+                <label style="font-size:12px;" data-i18n="vision_service_url_label">外部视觉服务地址（可选）</label>
+                <input type="text" id="cfg-vision-service-url" data-i18n-placeholder="vision_service_url_placeholder" placeholder="https://your-vision-service.example.com/process" style="width:100%;margin-top:4px;">
+                <div class="checkbox-desc" data-i18n="vision_service_url_desc">留空则仅使用本地注册的回调（register_vision_handler）。服务按 POST JSON 协议接收图片/视频，返回文字描述。</div>
+            </div>
+        </div>
+        <!-- end 视觉 API -->
+
+        <!-- 🛠️ 调试入口 -->
+        <div style="margin-top:16px;padding-top:12px;border-top:1px dashed #ccc;">
+            <button id="debug-btn" class="btn-debug" style="width:100%;">🛠️ 调试（Agent 运行诊断）</button>
+        </div>
+
         </div>
         <!-- end modal-body -->
 
@@ -551,10 +554,110 @@
         <h2>About</h2>
         <p><strong>Author:</strong> xingluosama</p>
         <p><strong>Studio:</strong> NORP Studio</p>
-        <p><strong>Version:</strong> Release 1.0</p>
+        <p><strong>Version:</strong> Release 1.1</p>
         <p style="margin-top:12px; color:#888; font-size:12px;">Built based on the OpenAI SDK specification.</p>
         <div class="btn-row">
             <button class="btn-primary" id="about-close-btn">OK</button>
+        </div>
+    </div>
+</div>
+
+<!-- Plugin Control Panel Modal (插件控制面板) -->
+<div id="plugin-panel-modal" class="modal">
+    <div class="modal-content" style="max-width:780px;max-height:90vh;display:flex;flex-direction:column;">
+        <div class="modal-body" style="max-height:78vh;overflow-y:auto;padding:0 20px 12px;flex:1;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                <h2 style="margin:0;" data-i18n="plugins_panel_title">🔌 插件控制面板</h2>
+                <button class="btn-small" id="plugin-panel-refresh" data-i18n="reload_plugins">🔄 刷新</button>
+            </div>
+
+            <div class="checkbox-row" style="margin-top:10px;">
+                <input type="checkbox" id="pp-plugins-enabled">
+                <label for="pp-plugins-enabled" data-i18n="plugins_enable">启用外部插件</label>
+            </div>
+            <div class="checkbox-desc" data-i18n="plugins_enable_desc">从下列目录加载插件。禁用则仅使用内置工具。</div>
+
+            <h3 style="margin-top:10px;" data-i18n="plugin_dirs">Plugin Directories</h3>
+            <div id="plugin-dirs-list" style="margin-bottom:6px;"></div>
+            <div class="flex-row" style="margin-bottom:4px;">
+                <button class="btn-small" id="add-plugin-dir" data-i18n="add_dir">+ Add Directory</button>
+                <button class="btn-small" id="reload-plugins-btn" style="margin-left:4px;" data-i18n="reload_plugins">🔄 Reload</button>
+            </div>
+
+            <h3 style="margin-top:10px;" data-i18n="plugin_list_title">已加载插件</h3>
+            <div id="plugin-list" style="margin-top:6px;font-size:12px;max-height:200px;overflow-y:auto;background:#f8f8f8;border-radius:4px;padding:6px;"></div>
+
+            <h3 style="margin-top:12px;" data-i18n="plugin_security_section">🔒 Plugin Security</h3>
+            <div class="checkbox-row">
+                <select id="cfg-security-audit" style="flex:1;">
+                    <option value="off" data-i18n="security_audit_off">Off — Skip all checks</option>
+                    <option value="warn" data-i18n="security_audit_warn">Warn — Log issues but allow loading</option>
+                    <option value="block" data-i18n="security_audit_block">Block — Reject plugins with critical issues</option>
+                </select>
+            </div>
+            <div class="checkbox-desc" data-i18n="security_audit_desc"><b>Code Audit:</b> Scans plugin source for dangerous patterns before loading.</div>
+
+            <div class="checkbox-row">
+                <select id="cfg-security-import-restrict" style="flex:1;">
+                    <option value="off" data-i18n="security_import_off">Off — No import restrictions</option>
+                    <option value="safe" data-i18n="security_import_safe">Safe — Block known dangerous modules</option>
+                    <option value="strict" data-i18n="security_import_strict">Strict — Only allow safe built-in modules</option>
+                </select>
+            </div>
+            <div class="checkbox-desc" data-i18n="security_import_desc"><b>Import Restriction:</b> Limits which Python modules plugins can import.</div>
+
+            <div class="checkbox-row">
+                <input type="checkbox" id="cfg-security-permissions">
+                <label for="cfg-security-permissions" data-i18n="security_permissions">Require Permission Declarations</label>
+            </div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="cfg-security-resource-limit">
+                <label for="cfg-security-resource-limit" data-i18n="security_resource">Enable Resource Limits</label>
+            </div>
+
+            <h3 style="margin-top:12px;" data-i18n="isolation_section">🧩 进程隔离</h3>
+            <div class="checkbox-row">
+                <select id="pp-isolation" style="flex:1;">
+                    <option value="process" data-i18n="isolation_process">进程级隔离（推荐）</option>
+                    <option value="inprocess" data-i18n="isolation_inprocess">进程内加载（仅调试，不推荐）</option>
+                </select>
+            </div>
+            <div class="checkbox-desc" data-i18n="isolation_desc">插件在独立子进程中运行，严禁直接挂载到主进程。进程内模式仅在开发调试时使用。</div>
+
+            <h3 style="margin-top:12px;" data-i18n="signature_section">🔏 签名 / 来源校验</h3>
+            <div class="checkbox-row">
+                <input type="checkbox" id="pp-signature-verify">
+                <label for="pp-signature-verify" data-i18n="signature_verify">启用签名/来源校验（默认开启）</label>
+            </div>
+            <div class="checkbox-desc" data-i18n="signature_desc">对插件源码做 Ed25519 签名验证。受信任签名的插件放宽导入限制；未签名插件默认严格限制；被篡改插件直接拒绝。</div>
+
+            <h3 style="margin-top:12px;" data-i18n="network_section">🌐 网络策略（SSRF 防护）</h3>
+            <div class="checkbox-row">
+                <select id="pp-network-policy" style="flex:1;">
+                    <option value="deny" data-i18n="network_deny">禁止访问网络（默认）</option>
+                    <option value="audited_public" data-i18n="network_audited">仅受审计的公网（URL 白名单）</option>
+                    <option value="public_only" data-i18n="network_public">全部公网（禁止内网）</option>
+                    <option value="allow_all" data-i18n="network_all">全部网络（含内网）</option>
+                </select>
+            </div>
+            <div class="checkbox-desc" data-i18n="network_desc">任何非「全部网络」的策略都会拦截内网 / 环回 / 元数据地址。</div>
+            <label style="font-size:12px;" data-i18n="network_url_allowlist">URL 白名单（逗号分隔）</label>
+            <input type="text" id="pp-network-url-allowlist" style="width:100%;margin-bottom:6px;box-sizing:border-box;">
+            <label style="font-size:12px;" data-i18n="network_domain_allowlist">域名白名单（逗号分隔）</label>
+            <input type="text" id="pp-network-domain-allowlist" style="width:100%;margin-bottom:6px;box-sizing:border-box;">
+
+            <h3 style="margin-top:12px;" data-i18n="plugin_approval_section">🛡️ 插件工具调用审批</h3>
+            <div class="checkbox-row">
+                <input type="checkbox" id="pp-approval-enabled">
+                <label for="pp-approval-enabled" data-i18n="plugin_approval_enabled">启用插件工具调用审批（默认开启）</label>
+            </div>
+            <div class="checkbox-desc" data-i18n="plugin_approval_desc">开启后，调用插件提供的工具前需人工确认。原生内置工具的确认请在「设置 → 原生工具确认」中配置。</div>
+
+            <div id="plugin-security-audit-summary" style="margin-top:8px;font-size:11px;color:#666;background:#f8f8f8;border-radius:4px;padding:6px;max-height:120px;overflow-y:auto;display:none;"></div>
+        </div>
+        <div class="btn-row" style="padding:0 20px 16px;display:flex;justify-content:space-between;">
+            <button class="btn-secondary" id="plugin-panel-close" data-i18n="cancel">取消</button>
+            <button class="btn-primary" id="plugin-panel-save" data-i18n="save">保存</button>
         </div>
     </div>
 </div>
@@ -570,6 +673,27 @@
         <div class="btn-row" style="padding:0 16px 16px;display:flex;justify-content:space-between;">
             <button class="btn-small btn-danger" id="msg-center-clear-all" data-i18n="msg_center_clear_all">清空全部</button>
             <button class="btn-primary" id="msg-center-close" data-i18n="ok">确定</button>
+        </div>
+    </div>
+</div>
+
+
+<!-- Debug Panel Modal (Agent 调试面板) -->
+<div id="debug-modal" class="modal">
+    <div class="modal-content" style="max-width:960px;max-height:88vh;display:flex;flex-direction:column;">
+        <div class="modal-body" style="max-height:78vh;overflow-y:auto;padding:0 20px 12px;flex:1;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <h2 style="margin:0;">🛠️ Agent 调试面板</h2>
+                <div style="display:flex;gap:6px;">
+                    <button class="btn-small" id="debug-refresh-btn">🔄 刷新</button>
+                    <button class="btn-small" id="debug-open-log-btn">📂 打开日志目录</button>
+                </div>
+            </div>
+            <div id="debug-summary" style="font-size:12px;color:#666;margin-bottom:10px;"></div>
+            <div id="debug-content"></div>
+        </div>
+        <div class="btn-row" style="padding:0 20px 16px;display:flex;justify-content:flex-end;">
+            <button class="btn-secondary" id="debug-close-btn">关闭</button>
         </div>
     </div>
 </div>

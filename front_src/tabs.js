@@ -284,7 +284,7 @@ function switchToTab(uiId) {
         var pc = newTab.pendingConfirm;
         newTab.pendingConfirm = null;
         setTimeout(function() {
-            showConfirmWriteModal(pc.tool, pc.path, pc.sessionId);
+            showConfirmWriteModal(pc.tool, pc.path, pc.sessionId, pc.isPlugin);
         }, 50);
     }
 

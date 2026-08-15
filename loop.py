@@ -381,7 +381,11 @@ class AgentLoop:
 
 
     def _confirm_write_delete(self, tool_name: str, tool_args: dict) -> bool:
-        """弹出确认对话框，返回 True 表示用户确认，False 表示取消/停止。"""
+        """弹出确认对话框，返回 True 表示用户确认，False 表示取消/停止。
+
+        兼容「不再显示」令牌（__confirm_no_more__）：视为确认。
+        （loop.py 为遗留同步路径，持久化关闭由 async_loop 负责。）
+        """
         confirm_data = json.dumps({
             "tool": tool_name,
             "path": tool_args.get("path", "")
@@ -390,7 +394,7 @@ class AgentLoop:
         reply = self._wait_for_user_input()
         if self._stop_event.is_set():
             return False
-        return reply.strip() == "__confirm__"
+        return reply.strip() in ("__confirm__", "__confirm_no_more__")
 
 
     def get_last_usage(self) -> dict:

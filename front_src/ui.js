@@ -1,5 +1,19 @@
+// ── 原生工具确认总开关联动：关闭时禁用子项 ──
+function updateNativeConfirmVisibility() {
+    var enabled = document.getElementById('cfg-native-confirm-enabled').checked;
+    ['cfg-native-confirm-write', 'cfg-native-confirm-delete', 'cfg-native-confirm-exec'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.disabled = !enabled;
+    });
+}
+
 async function openSettings() {
     try { config = await window.pywebview.api.get_config(); } catch(e) { config = {}; }
+
+    var nativeConfirmMaster = document.getElementById('cfg-native-confirm-enabled');
+    if (nativeConfirmMaster) {
+        nativeConfirmMaster.addEventListener('change', updateNativeConfirmVisibility);
+    }
 
     // ── Language selector (top of settings) ──
     var langSelect = document.getElementById('cfg-language');
@@ -12,7 +26,6 @@ async function openSettings() {
         setLanguage(this.value);
         // Update dynamic content that depends on language
         updateThinkMutualExclusion();
-        updatePluginVisibility();
         renderPluginDirs();
         renderPluginList();
         renderSecurityAuditSummary();
@@ -28,8 +41,13 @@ async function openSettings() {
     document.getElementById('cfg-queue-size').value = config.queue_max_size || 200;
     document.getElementById('cfg-max-steps').value = config.max_steps || 128;
     document.getElementById('cfg-task-timeout').value = config.task_timeout || 0;
+    document.getElementById('cfg-api-request-timeout').value = String(config.api_request_timeout || 180);
     document.getElementById('cfg-web-search').checked = config.enable_web_search || false;
-    document.getElementById('cfg-confirm-write-delete').checked = config.confirm_write_delete !== false;
+    document.getElementById('cfg-native-confirm-enabled').checked = config.native_confirm_enabled !== false;
+    document.getElementById('cfg-native-confirm-write').checked = config.native_confirm_write !== false;
+    document.getElementById('cfg-native-confirm-delete').checked = config.native_confirm_delete !== false;
+    document.getElementById('cfg-native-confirm-exec').checked = config.native_confirm_exec !== false;
+    updateNativeConfirmVisibility();
 
     var thinkLevel = config.think_level || '高';
     document.getElementById('cfg-think-level').value = thinkLevel;
@@ -43,19 +61,8 @@ async function openSettings() {
     document.getElementById('cfg-memory-mode').value = config.memory_mode || 'full';
     document.getElementById('cfg-max-rounds').value = config.max_rounds || 10;
 
-    // Plugin fields
-    document.getElementById('cfg-plugins-enabled').checked = config.plugins_enabled !== false;
-    updatePluginVisibility();
-    renderPluginDirs();
-    renderPluginList();
-
-    // Security fields
-    document.getElementById('cfg-security-audit').value = config.plugin_security_audit || 'warn';
-    _prevSecurityAudit = document.getElementById("cfg-security-audit").value;
-    document.getElementById('cfg-security-import-restrict').value = config.plugin_security_import_restrict || 'off';
-    document.getElementById('cfg-security-permissions').checked = config.plugin_security_require_permissions || false;
-    document.getElementById('cfg-security-resource-limit').checked = config.plugin_security_resource_limit || false;
-    renderSecurityAuditSummary();
+    // Plugin fields（插件启用开关、目录与安全配置均已迁移至独立插件面板）
+    config.plugin_dirs = config.plugin_dirs || [];
 
     // NORP safety system
     document.getElementById('cfg-norp-safe-enabled').checked = config.norp_safe_enabled !== false;
@@ -73,6 +80,11 @@ async function openSettings() {
     document.getElementById('cfg-custom-prompt-file').value = config.custom_system_prompt_file || '';
     updateCustomPromptVisibility();
     updateCustomPromptSource();
+
+    // Vision API
+    document.getElementById('cfg-vision-enabled').checked = config.vision_enabled === true;
+    document.getElementById('cfg-vision-service-url').value = config.vision_service_url || '';
+    updateVisionVisibility();
 
     updateQueueWarning();
     setLanguage(currentLang);
@@ -94,19 +106,17 @@ function updateQueueWarning() {
     document.getElementById('queue-warning').style.display = val > 300 ? 'block' : 'none';
 }
 
-// ── Plugin visibility toggle ──
-function updatePluginVisibility() {
-    var enabled = document.getElementById('cfg-plugins-enabled').checked;
-    var pluginSection = document.getElementById('plugin-dirs-section');
-    var pluginSecuritySection = document.getElementById('plugin-security-section');
-    if (pluginSection) pluginSection.style.display = enabled ? 'block' : 'none';
-    if (pluginSecuritySection) pluginSecuritySection.style.display = enabled ? 'block' : 'none';
-}
-
 // ── Custom system prompt visibility ──
 function updateCustomPromptVisibility() {
     var enabled = document.getElementById('cfg-custom-prompt-enabled').checked;
     var section = document.getElementById('custom-prompt-section');
+    if (section) section.style.display = enabled ? 'block' : 'none';
+}
+
+// ── Vision API visibility ──
+function updateVisionVisibility() {
+    var enabled = document.getElementById('cfg-vision-enabled').checked;
+    var section = document.getElementById('vision-config');
     if (section) section.style.display = enabled ? 'block' : 'none';
 }
 
@@ -169,12 +179,6 @@ document.addEventListener('DOMContentLoaded', function() {
         fetchModels(url);
     });
 
-    // Plugins toggle → hide/show plugin-related settings
-    var pluginsToggle = document.getElementById('cfg-plugins-enabled');
-    if (pluginsToggle) {
-        pluginsToggle.addEventListener('change', updatePluginVisibility);
-    }
-
     // Custom system prompt toggle
     var customPromptToggle = document.getElementById('cfg-custom-prompt-enabled');
     if (customPromptToggle) {
@@ -189,6 +193,11 @@ document.addEventListener('DOMContentLoaded', function() {
     var browseBtn = document.getElementById('cfg-custom-prompt-browse');
     if (browseBtn) {
         browseBtn.addEventListener('click', browseCustomPromptFile);
+    }
+    // Vision API toggle
+    var visionToggle = document.getElementById('cfg-vision-enabled');
+    if (visionToggle) {
+        visionToggle.addEventListener('change', updateVisionVisibility);
     }
 });
 
@@ -208,26 +217,28 @@ async function saveSettings() {
         queue_max_size: parseInt(document.getElementById('cfg-queue-size').value) || 200,
         max_steps: parseInt(document.getElementById('cfg-max-steps').value) || 128,
         task_timeout: parseInt(document.getElementById('cfg-task-timeout').value) || 0,
+        api_request_timeout: parseInt(document.getElementById('cfg-api-request-timeout').value) || 180,
         enable_web_search: document.getElementById('cfg-web-search').checked,
-        confirm_write_delete: document.getElementById('cfg-confirm-write-delete').checked,
+        native_confirm_enabled: document.getElementById('cfg-native-confirm-enabled').checked,
+        native_confirm_write: document.getElementById('cfg-native-confirm-write').checked,
+        native_confirm_delete: document.getElementById('cfg-native-confirm-delete').checked,
+        native_confirm_exec: document.getElementById('cfg-native-confirm-exec').checked,
         think_level: document.getElementById('cfg-think-level').value,
         temperature: parseFloat(document.getElementById('cfg-temperature-value').textContent) || 1.0,
         max_tokens: parseInt(document.getElementById('cfg-max-tokens').value) || 32767,
         memory: document.getElementById('cfg-memory').checked,
         memory_mode: document.getElementById('cfg-memory-mode').value,
         max_rounds: parseInt(document.getElementById('cfg-max-rounds').value) || 10,
-        plugins_enabled: document.getElementById('cfg-plugins-enabled').checked,
+        plugins_enabled: config.plugins_enabled !== false,
         plugin_dirs: config.plugin_dirs || [],
-        plugin_security_audit: document.getElementById('cfg-security-audit').value,
-        plugin_security_import_restrict: document.getElementById('cfg-security-import-restrict').value,
-        plugin_security_require_permissions: document.getElementById('cfg-security-permissions').checked,
-        plugin_security_resource_limit: document.getElementById('cfg-security-resource-limit').checked,
         custom_system_prompt_enabled: document.getElementById('cfg-custom-prompt-enabled').checked,
         custom_system_prompt: document.getElementById('cfg-custom-prompt').value,
         custom_system_prompt_file: document.getElementById('cfg-custom-prompt-file').value,
         norp_safe_enabled: document.getElementById('cfg-norp-safe-enabled').checked,
         jailbreak_guard_enabled: document.getElementById('cfg-jailbreak-guard-enabled').checked,
         jailbreak_guard_action: document.getElementById('cfg-jailbreak-guard-action').value,
+        vision_enabled: document.getElementById('cfg-vision-enabled').checked,
+        vision_service_url: document.getElementById('cfg-vision-service-url').value.trim(),
     };
 
     try {
@@ -266,8 +277,13 @@ async function restoreDefaults() {
         document.getElementById('cfg-queue-size').value = config.queue_max_size || 200;
         document.getElementById('cfg-max-steps').value = config.max_steps || 128;
         document.getElementById('cfg-task-timeout').value = config.task_timeout || 0;
+        document.getElementById('cfg-api-request-timeout').value = String(config.api_request_timeout || 180);
         document.getElementById('cfg-web-search').checked = config.enable_web_search || false;
-        document.getElementById('cfg-confirm-write-delete').checked = config.confirm_write_delete !== false;
+        document.getElementById('cfg-native-confirm-enabled').checked = config.native_confirm_enabled !== false;
+        document.getElementById('cfg-native-confirm-write').checked = config.native_confirm_write !== false;
+        document.getElementById('cfg-native-confirm-delete').checked = config.native_confirm_delete !== false;
+        document.getElementById('cfg-native-confirm-exec').checked = config.native_confirm_exec !== false;
+        updateNativeConfirmVisibility();
         document.getElementById('cfg-think-level').value = config.think_level || '高';
         var temp = config.temperature !== undefined ? config.temperature : 1.0;
         document.getElementById('cfg-temperature').value = Math.round(temp * 10);
@@ -276,16 +292,14 @@ async function restoreDefaults() {
         document.getElementById('cfg-memory').checked = config.memory !== false;
         document.getElementById('cfg-memory-mode').value = config.memory_mode || 'full';
         document.getElementById('cfg-max-rounds').value = config.max_rounds || 10;
-        document.getElementById('cfg-plugins-enabled').checked = config.plugins_enabled !== false;
-        updatePluginVisibility();
         config.plugin_dirs = config.plugin_dirs || [];
         renderPluginDirs();
         renderPluginList();
 
-        document.getElementById('cfg-security-audit').value = config.plugin_security_audit || 'warn';
-        document.getElementById('cfg-security-import-restrict').value = config.plugin_security_import_restrict || 'off';
-        document.getElementById('cfg-security-permissions').checked = config.plugin_security_require_permissions || false;
-        document.getElementById('cfg-security-resource-limit').checked = config.plugin_security_resource_limit || false;
+        document.getElementById('cfg-security-audit').value = config.plugin_security_audit || 'block';
+        document.getElementById('cfg-security-import-restrict').value = config.plugin_security_import_restrict || 'strict';
+        document.getElementById('cfg-security-permissions').checked = config.plugin_security_require_permissions !== false;
+        document.getElementById('cfg-security-resource-limit').checked = config.plugin_security_resource_limit === true;
         renderSecurityAuditSummary();
 
         // NORP safety system reset
@@ -304,6 +318,11 @@ async function restoreDefaults() {
         document.getElementById('cfg-custom-prompt-source').value = 'text';
         updateCustomPromptVisibility();
         updateCustomPromptSource();
+
+        // Vision API reset
+        document.getElementById('cfg-vision-enabled').checked = false;
+        document.getElementById('cfg-vision-service-url').value = '';
+        updateVisionVisibility();
 
         updateThinkMutualExclusion();
         updateQueueWarning();
@@ -357,11 +376,29 @@ async function renderPluginList() {
                 auditBadge += ' <span style="background:#e08f3a;color:#fff;padding:0 4px;border-radius:2px;font-size:10px;">🟠' + p.audit_warning + '</span>';
             }
 
+            // Signature / isolation badges（P0-1 / P0-5）
+            var sigBadge = '';
+            if (p.signature_status === 'trusted') {
+                sigBadge += ' <span style="background:#2e7d32;color:#fff;padding:0 4px;border-radius:2px;font-size:10px;" title="' + t('signature_trusted') + '">🔏已签名</span>';
+            } else if (p.signature_status === 'unsigned') {
+                sigBadge += ' <span style="background:#f9a825;color:#fff;padding:0 4px;border-radius:2px;font-size:10px;" title="' + t('signature_unsigned') + '">未签名</span>';
+            } else if (p.signature_status === 'invalid') {
+                sigBadge += ' <span style="background:#dc3545;color:#fff;padding:0 4px;border-radius:2px;font-size:10px;" title="' + t('signature_invalid') + '">签名无效</span>';
+            } else if (p.signature_status === 'untrusted') {
+                sigBadge += ' <span style="background:#e08f3a;color:#fff;padding:0 4px;border-radius:2px;font-size:10px;" title="' + t('signature_untrusted') + '">未信任</span>';
+            }
+            if (p.isolation === 'process') {
+                sigBadge += ' <span style="background:#5c6bc0;color:#fff;padding:0 4px;border-radius:2px;font-size:10px;">🧩隔离</span>';
+            } else if (p.isolation === 'inprocess') {
+                sigBadge += ' <span style="background:#b71c1c;color:#fff;padding:0 4px;border-radius:2px;font-size:10px;">⚠️进程内</span>';
+            }
+
             html += '<div style="padding:3px 0;border-bottom:1px solid #eee;">';
             html += icon + ' <b>' + escapeHtml(p.name) + '</b> v' + escapeHtml(p.version);
             if (p.publisher) html += ' <span style="font-size:10px;color:#888;">by ' + escapeHtml(p.publisher) + '</span>';
             html += ' — tools:' + p.tool_count + ' hooks:' + p.hook_count;
             html += auditBadge;
+            html += sigBadge;
             if (p.description) html += '<br><span style="font-size:10px;color:#888;">' + escapeHtml(p.description) + '</span>';
             html += err;
             html += '</div>';
@@ -426,6 +463,76 @@ async function renderSecurityAuditSummary() {
         el.innerHTML = html;
     } catch(e) {
         el.style.display = 'none';
+    }
+}
+
+// ── 插件控制面板（P0 改造：独立面板）──
+
+async function openPluginPanel() {
+    try {
+        config = await window.pywebview.api.get_config();
+        var sec = await window.pywebview.api.get_plugin_security_config();
+        if (sec) {
+            config.plugins_enabled = sec.plugins_enabled !== undefined ? sec.plugins_enabled : config.plugins_enabled;
+            config.plugin_security_audit = sec.audit;
+            config.plugin_security_import_restrict = sec.import_restrict;
+            config.plugin_security_require_permissions = sec.require_permissions;
+            config.plugin_security_resource_limit = sec.resource_limit;
+            config.plugin_isolation = sec.isolation;
+            config.plugin_signature_verify = sec.signature_verify;
+            config.plugin_trusted_keys = sec.trusted_keys || [];
+            config.plugin_network_policy = sec.network_policy;
+            config.plugin_network_url_allowlist = sec.network_url_allowlist || [];
+            config.plugin_network_domain_allowlist = sec.network_domain_allowlist || [];
+            config.approval_enabled = sec.approval_enabled;
+        }
+    } catch(e) {
+        config = config || {};
+    }
+
+    document.getElementById('cfg-security-audit').value = config.plugin_security_audit || 'block';
+    _prevSecurityAudit = document.getElementById('cfg-security-audit').value;
+    document.getElementById('cfg-security-import-restrict').value = config.plugin_security_import_restrict || 'strict';
+    document.getElementById('cfg-security-permissions').checked = config.plugin_security_require_permissions !== false;
+    document.getElementById('cfg-security-resource-limit').checked = config.plugin_security_resource_limit === true;
+
+    document.getElementById('pp-isolation').value = config.plugin_isolation || 'process';
+    document.getElementById('pp-signature-verify').checked = config.plugin_signature_verify !== false;
+    document.getElementById('pp-network-policy').value = config.plugin_network_policy || 'deny';
+    document.getElementById('pp-network-url-allowlist').value = (config.plugin_network_url_allowlist || []).join(', ');
+    document.getElementById('pp-network-domain-allowlist').value = (config.plugin_network_domain_allowlist || []).join(', ');
+    document.getElementById('pp-approval-enabled').checked = config.approval_enabled !== false;
+    document.getElementById('pp-plugins-enabled').checked = config.plugins_enabled !== false;
+
+    renderPluginDirs();
+    renderPluginList();
+    document.getElementById('plugin-panel-modal').style.display = 'block';
+}
+
+async function savePluginPanel() {
+    var urlAllowlist = document.getElementById('pp-network-url-allowlist').value.split(',')
+        .map(function(s){return s.trim();}).filter(function(s){return s.length > 0;});
+    var domainAllowlist = document.getElementById('pp-network-domain-allowlist').value.split(',')
+        .map(function(s){return s.trim();}).filter(function(s){return s.length > 0;});
+    try {
+        await window.pywebview.api.set_plugin_security_config(
+            document.getElementById('cfg-security-audit').value,
+            document.getElementById('cfg-security-import-restrict').value,
+            document.getElementById('cfg-security-permissions').checked,
+            document.getElementById('cfg-security-resource-limit').checked,
+            document.getElementById('pp-isolation').value,
+            document.getElementById('pp-signature-verify').checked,
+            (config.plugin_trusted_keys || []),
+            document.getElementById('pp-network-policy').value,
+            urlAllowlist,
+            domainAllowlist,
+            document.getElementById('pp-approval-enabled').checked,
+            document.getElementById('pp-plugins-enabled').checked
+        );
+        document.getElementById('plugin-panel-modal').style.display = 'none';
+        showToast(t('settings_saved'));
+    } catch(e) {
+        showToast(t('save_failed') + ': ' + e.message);
     }
 }
 
@@ -768,6 +875,30 @@ document.getElementById('runtime-health-toggle').addEventListener('click', funct
     }
 });
 
+// ── 插件控制面板 ──
+document.getElementById('plugins-btn').addEventListener('click', function() {
+    var modal = document.getElementById('plugin-panel-modal');
+    if (modal.style.display === 'block') {
+        modal.style.display = 'none';
+    } else {
+        openPluginPanel();
+    }
+});
+document.getElementById('plugin-panel-close').addEventListener('click', function() {
+    document.getElementById('plugin-panel-modal').style.display = 'none';
+});
+document.getElementById('plugin-panel-save').addEventListener('click', savePluginPanel);
+document.getElementById('plugin-panel-refresh').addEventListener('click', function() {
+    openPluginPanel();
+});
+var openPanelBtn = document.getElementById('open-plugin-panel-btn');
+if (openPanelBtn) {
+    openPanelBtn.addEventListener('click', function() {
+        document.getElementById('settings-modal').style.display = 'none';
+        openPluginPanel();
+    });
+}
+
 // ── Message Center ──
 document.getElementById('msg-center-btn').addEventListener('click', function() {
     var modal = document.getElementById('message-center-modal');
@@ -896,3 +1027,287 @@ setTimeout(function() {
         }
     }
 }, 1000);
+
+// ═══════════════════════════════════════════════════════════════
+//  🛠️ 调试面板（Agent 运行诊断）
+// ═══════════════════════════════════════════════════════════════
+
+function fmtJson(obj) {
+    if (obj === null || obj === undefined) return '';
+    try {
+        if (typeof obj === 'string') return obj;
+        return JSON.stringify(obj, null, 2);
+    } catch (e) {
+        return String(obj);
+    }
+}
+
+async function openDebugPanel() {
+    var modal = document.getElementById('debug-modal');
+    if (modal) modal.style.display = 'block';
+    await refreshDebugPanel();
+}
+
+async function refreshDebugPanel() {
+    var content = document.getElementById('debug-content');
+    if (content) content.innerHTML = '<div class="debug-empty">⏳ 正在加载调试数据...</div>';
+    try {
+        var data = await window.pywebview.api.get_debug_data();
+        renderDebugPanel(data || {});
+    } catch (e) {
+        if (content) content.innerHTML = '<div class="debug-empty">加载失败: ' + escHtml((e && e.message) || e) + '</div>';
+    }
+}
+
+function renderDebugPanel(data) {
+    var summary = document.getElementById('debug-summary');
+    var content = document.getElementById('debug-content');
+    if (!content) return;
+
+    // 顶部摘要
+    var parts = [];
+    if (data.task_id) parts.push('任务: ' + escHtml(data.task_id));
+    if (data.started_at) parts.push('开始: ' + escHtml(data.started_at));
+    if (data.finished_at) parts.push('结束: ' + escHtml(data.finished_at));
+    if (data.user_message) parts.push('提问: ' + escHtml(String(data.user_message).slice(0, 40)));
+    if (data.log_dir) parts.push('日志目录: ' + escHtml(data.log_dir));
+    if (summary) summary.innerHTML = parts.length ? parts.join(' &nbsp;|&nbsp; ') : '暂无任务记录';
+
+    var html = '';
+    html += renderReactTimeline(data.react_steps);
+    html += renderToolCalls(data.tool_calls);
+    html += renderSecurityEvents(data.security_events);
+    html += renderHookEvents(data.hook_events);
+    html += renderSnapshot(data.snapshot);
+    content.innerHTML = html;
+}
+
+// ── 调试面板区块折叠/展开（默认折叠）──
+function toggleDebugSection(headerEl) {
+    if (!headerEl) return;
+    var body = headerEl.nextElementSibling;
+    if (!body) return;
+    var caret = headerEl.querySelector('.debug-caret');
+    var isCollapsed = body.style.display === 'none';
+    body.style.display = isCollapsed ? 'block' : 'none';
+    if (caret) caret.textContent = isCollapsed ? '▼' : '▶';
+}
+
+// ── 模块 1：ReAct 循环时间线 ──
+function renderReactTimeline(steps) {
+    steps = steps || [];
+    var html = '<div class="debug-section">';
+    html += '<div class="debug-section-header debug-collapse" onclick="toggleDebugSection(this)" title="点击展开/折叠">';
+    html += '<span class="debug-caret">▶</span> 📜 ReAct 循环时间线 <span class="debug-count">' + steps.length + ' 步</span>';
+    html += '</div>';
+    html += '<div class="debug-section-body" style="display:none">';
+    if (!steps.length) {
+        html += '<div class="debug-empty">暂无 ReAct 循环记录（尚未运行任务）</div>';
+    } else {
+        for (var i = 0; i < steps.length; i++) {
+            var s = steps[i];
+            var elapsed = s.elapsed_ms !== undefined ? (s.elapsed_ms / 1000).toFixed(2) + 's' : '-';
+            html += '<div class="debug-card">';
+            html += '<div class="debug-card-title">步骤 #' + s.step + ' &nbsp;<span class="debug-meta">' + escHtml(s.timestamp || '') + ' · 累计耗时 ' + elapsed + '</span></div>';
+
+            if (s.reasoning) {
+                html += '<div class="debug-label">🧠 推理过程（思考链）</div>';
+                html += '<div class="debug-pre">' + escHtml(s.reasoning) + '</div>';
+            }
+
+            if (s.tool_calls && s.tool_calls.length) {
+                html += '<div class="debug-label">🔧 工具调用</div>';
+                for (var j = 0; j < s.tool_calls.length; j++) {
+                    var tc = s.tool_calls[j];
+                    html += '<div class="debug-pre">' + escHtml(tc.name || '') + '(' + escHtml(tc.arguments || '') + ')</div>';
+                }
+            }
+
+            if (s.observations && s.observations.length) {
+                html += '<div class="debug-label">👁️ 观察结果</div>';
+                for (var k = 0; k < s.observations.length; k++) {
+                    var o = s.observations[k];
+                    html += '<div class="debug-pre">[' + escHtml(o.tool || '') + '] ' + escHtml(o.result || '') + '</div>';
+                }
+            }
+            html += '</div>';
+        }
+    }
+    html += '</div></div>';
+    return html;
+}
+
+// ── 模块 2：工具调用详情 ──
+function renderToolCalls(calls) {
+    calls = calls || [];
+    var html = '<div class="debug-section">';
+    html += '<div class="debug-section-header">🛠️ 工具调用详情 <span class="debug-count">' + calls.length + ' 次</span></div>';
+    html += '<div class="debug-section-body">';
+    if (!calls.length) {
+        html += '<div class="debug-empty">暂无工具调用记录</div>';
+    } else {
+        for (var i = 0; i < calls.length; i++) {
+            var c = calls[i];
+            var blockedTag = c.blocked ? '<span class="debug-tag blocked">🚫 拦截</span>' : '';
+            html += '<div class="debug-card">';
+            html += '<div class="debug-card-title">' + escHtml(c.tool || '') + ' ' + blockedTag + ' <span class="debug-meta">步骤 #' + (c.step || '-') + ' · ' + escHtml(c.timestamp || '') + ' · 耗时 ' + (c.elapsed_ms !== undefined ? c.elapsed_ms + ' ms' : '-') + '</span></div>';
+
+            if (c.blocked && c.blocked_reason) {
+                html += '<div class="debug-label">拦截原因</div><div class="debug-pre">' + escHtml(c.blocked_reason) + '</div>';
+            }
+
+            if (c.args !== undefined && c.args !== null) {
+                html += '<div class="debug-label">📥 入参</div>';
+                html += '<div class="debug-pre">' + escHtml(fmtJson(c.args)) + '</div>';
+            }
+            if (c.result) {
+                html += '<div class="debug-label">📤 出参</div>';
+                html += '<div class="debug-pre">' + escHtml(fmtJson(c.result)) + '</div>';
+            }
+            if (c.sandbox_paths && Object.keys(c.sandbox_paths).length) {
+                html += '<div class="debug-label">🗺️ 沙箱路径映射</div>';
+                html += '<div class="debug-pre">' + escHtml(fmtJson(c.sandbox_paths)) + '</div>';
+            }
+            html += '</div>';
+        }
+    }
+    html += '</div></div>';
+    return html;
+}
+
+// ── 模块 3：安全拦截日志 ──
+function renderSecurityEvents(events) {
+    events = events || [];
+    var html = '<div class="debug-section">';
+    html += '<div class="debug-section-header debug-collapse" onclick="toggleDebugSection(this)" title="点击展开/折叠">';
+    html += '<span class="debug-caret">▶</span> 🛡️ 安全拦截日志 <span class="debug-count">' + events.length + ' 条</span>';
+    html += '</div>';
+    html += '<div class="debug-section-body" style="display:none">';
+    if (!events.length) {
+        html += '<div class="debug-empty">暂无安全拦截事件（✅ 安全系统运行正常）</div>';
+    } else {
+        for (var i = events.length - 1; i >= 0; i--) {
+            var e = events[i];
+            var actionTag = '';
+            if (e.action === 'blocked') actionTag = '<span class="debug-tag blocked">🚫 拦截</span>';
+            else if (e.action === 'allowed') actionTag = '<span class="debug-tag allowed">✅ 放行</span>';
+            else actionTag = '<span class="debug-tag">' + escHtml(e.action || '未知') + '</span>';
+            var level = escHtml(e.threat_level || '');
+            html += '<div class="debug-card">';
+            html += '<div class="debug-card-title">' + actionTag + ' <span class="debug-meta">' + escHtml(e.timestamp || '') + ' · 威胁等级: ' + level + ' · ' + escHtml(e.event_type || '') + '</span></div>';
+            if (e.reason) html += '<div class="debug-label">规则命中</div><div class="debug-pre">' + escHtml(e.reason) + '</div>';
+            if (e.details) html += '<div class="debug-label">详情</div><div class="debug-pre">' + escHtml(fmtJson(e.details)) + '</div>';
+            html += '</div>';
+        }
+    }
+    html += '</div></div>';
+    return html;
+}
+
+// ── 模块 4：插件钩子触发记录 ──
+function renderHookEvents(events) {
+    events = events || [];
+    var html = '<div class="debug-section">';
+    html += '<div class="debug-section-header">🪝 插件钩子触发记录 <span class="debug-count">' + events.length + ' 次</span></div>';
+    html += '<div class="debug-section-body">';
+    if (!events.length) {
+        html += '<div class="debug-empty">暂无插件钩子触发（未加载插件或插件未注册钩子）</div>';
+    } else {
+        for (var i = 0; i < events.length; i++) {
+            var h = events[i];
+            var layer = (h.layer || '?').toLowerCase();
+            var layerTag = '<span class="debug-tag ' + layer + '">' + escHtml(h.layer || '?') + '</span>';
+            var actionTag = '';
+            if (h.action === 'mutated') actionTag = '<span class="debug-tag mutated">✏️ 修改数据</span>';
+            else if (h.action === 'blocked') actionTag = '<span class="debug-tag blocked">🚫 拦截</span>';
+            else actionTag = '<span class="debug-tag">🔔 触发</span>';
+            html += '<div class="debug-card">';
+            html += '<div class="debug-card-title">' + layerTag + ' ' + escHtml(h.hook || '') + ' ' + actionTag + ' <span class="debug-meta">' + escHtml(h.plugin || '') + ' · 步骤 #' + (h.step || '-') + ' · ' + escHtml(h.timestamp || '') + '</span></div>';
+            if (h.before !== undefined && h.before !== null) {
+                html += '<div class="debug-label">变形前</div><div class="debug-pre">' + escHtml(fmtJson(h.before)) + '</div>';
+            }
+            if (h.after !== undefined && h.after !== null) {
+                html += '<div class="debug-label">变形后</div><div class="debug-pre">' + escHtml(fmtJson(h.after)) + '</div>';
+            }
+            html += '</div>';
+        }
+    }
+    html += '</div></div>';
+    return html;
+}
+
+// ── 模块 5：性能与状态快照 ──
+function renderSnapshot(snapshot) {
+    snapshot = snapshot || {};
+    var tokens = snapshot.tokens || {};
+    var pool = snapshot.sandbox_pool || {};
+    var fio = snapshot.file_io_queue || {};
+
+    var html = '<div class="debug-section">';
+    html += '<div class="debug-section-header">⚡ 性能与状态快照</div>';
+    html += '<div class="debug-section-body">';
+
+    // Token 计量
+    html += '<div class="debug-label" style="margin-bottom:6px;">🔢 Token 实时计量</div>';
+    html += '<div class="debug-grid">';
+    html += '<div class="debug-stat"><div class="debug-stat-value">' + (tokens.input_tokens || 0).toLocaleString() + '</div><div class="debug-stat-label">输入 Token</div></div>';
+    html += '<div class="debug-stat"><div class="debug-stat-value">' + (tokens.output_tokens || 0).toLocaleString() + '</div><div class="debug-stat-label">输出 Token</div></div>';
+    html += '<div class="debug-stat"><div class="debug-stat-value">' + (tokens.tool_call_tokens || 0).toLocaleString() + '</div><div class="debug-stat-label">工具调用 Token</div></div>';
+    html += '</div>';
+
+    // 沙箱池
+    html += '<div class="debug-label" style="margin:10px 0 6px;">🏖️ 沙箱池（Sandbox Pool）</div>';
+    html += '<div class="debug-grid">';
+    html += '<div class="debug-stat"><div class="debug-stat-value">' + (pool.total !== undefined ? pool.total : '-') + '</div><div class="debug-stat-label">总沙箱数</div></div>';
+    html += '<div class="debug-stat"><div class="debug-stat-value">' + (pool.available !== undefined ? pool.available : '-') + '</div><div class="debug-stat-label">可用</div></div>';
+    html += '<div class="debug-stat"><div class="debug-stat-value">' + (pool.in_use !== undefined ? pool.in_use : '-') + '</div><div class="debug-stat-label">占用中</div></div>';
+    html += '<div class="debug-stat"><div class="debug-stat-value">' + (pool.created !== undefined ? pool.created : '-') + '</div><div class="debug-stat-label">已创建</div></div>';
+    html += '</div>';
+
+    // 文件 I/O 队列
+    html += '<div class="debug-label" style="margin:10px 0 6px;">📁 文件 I/O 队列</div>';
+    html += '<div class="debug-grid">';
+    html += '<div class="debug-stat"><div class="debug-stat-value">' + (fio.active_files !== undefined ? fio.active_files : '-') + '</div><div class="debug-stat-label">活跃文件数</div></div>';
+    html += '<div class="debug-stat"><div class="debug-stat-value">' + (fio.total_tracked_files !== undefined ? fio.total_tracked_files : '-') + '</div><div class="debug-stat-label">跟踪文件总数</div></div>';
+    html += '</div>';
+
+    // 事件队列
+    html += '<div class="debug-label" style="margin:10px 0 6px;">📨 事件队列（event_queue）</div>';
+    html += '<div class="debug-grid">';
+    html += '<div class="debug-stat"><div class="debug-stat-value">' + (snapshot.event_queue_size !== undefined ? snapshot.event_queue_size : '-') + '</div><div class="debug-stat-label">当前队列长度</div></div>';
+    html += '</div>';
+
+    html += '</div></div>';
+    return html;
+}
+
+// ── 事件绑定 ──
+document.addEventListener('DOMContentLoaded', function() {
+    var debugBtn = document.getElementById('debug-btn');
+    if (debugBtn) debugBtn.addEventListener('click', openDebugPanel);
+
+    var debugClose = document.getElementById('debug-close-btn');
+    if (debugClose) debugClose.addEventListener('click', function() {
+        var modal = document.getElementById('debug-modal');
+        if (modal) modal.style.display = 'none';
+    });
+
+    var debugRefresh = document.getElementById('debug-refresh-btn');
+    if (debugRefresh) debugRefresh.addEventListener('click', refreshDebugPanel);
+
+    var debugOpenLog = document.getElementById('debug-open-log-btn');
+    if (debugOpenLog) debugOpenLog.addEventListener('click', async function() {
+        try {
+            var r = await window.pywebview.api.open_debug_log_dir();
+            if (r && r.indexOf('error:') === 0) showToast('打开失败: ' + r.replace('error:', ''));
+        } catch (e) { showToast('打开失败: ' + (e.message || e)); }
+    });
+});
+
+// 点击调试面板遮罩关闭
+(function() {
+    var modal = document.getElementById('debug-modal');
+    if (modal) modal.addEventListener('click', function(e) {
+        if (e.target === modal) modal.style.display = 'none';
+    });
+})();

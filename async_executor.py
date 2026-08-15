@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict
@@ -23,10 +24,12 @@ from permission_cascade import (
 from lifecycle_manager import LifecycleManager, get_lifecycle_manager
 from resource_isolator import ResourceIsolator, ResourceLimits, get_resource_isolator
 from norp_safe import NorpSafe, get_norp_safe, ThreatLevel
+from vision import is_visual_ext, describe_visual_file, VisionNotConfigured
 from workspace_index import WorkspaceIndex, get_workspace_index, search_large_file_stream, scan_and_index, _fmt_size as _wi_fmt_size
 from file_surgery import perform_surgery, perform_scan
 from web_fetcher_native import handle_web_fetch, handle_web_extract_links
 from context_index import FTS5Retriever, get_context_index, chunk_text
+from agent_shared import robust_decode
 
 
 class AsyncToolExecutor:
@@ -123,11 +126,14 @@ class AsyncToolExecutor:
 
     async def execute(self, tool_name: str, args: dict) -> str:
         """异步执行工具。"""
+        _start = time.time()
+
         # 权限检查
         self._check_tool_permission(tool_name, args)
 
         # 资源检查
         if not self.resource_isolator.check_any(self.task_id):
+            self._record_debug_tool_call(tool_name, args, "Error: resource quota exhausted for this task", _start)
             return "Error: resource quota exhausted for this task"
 
         handlers = {
@@ -167,22 +173,50 @@ class AsyncToolExecutor:
 
         handler = handlers.get(tool_name)
         if not handler:
+            self._record_debug_tool_call(tool_name, args, f"Error: unknown tool '{tool_name}'", _start)
             return f"Error: unknown tool '{tool_name}'"
 
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 handler(args),
                 timeout=self.BUILTIN_TOOL_TIMEOUT,
             )
         except asyncio.TimeoutError:
-            return (
+            result = (
                 f"Error: built-in tool '{tool_name}' timed out "
                 f"after {self.BUILTIN_TOOL_TIMEOUT:.0f}s"
             )
         except PermissionError as e:
-            return f"Permission denied: {str(e)}"
+            result = f"Permission denied: {str(e)}"
         except Exception as e:
-            return f"Tool execution failed: {str(e)}"
+            result = f"Tool execution failed: {str(e)}"
+
+        self._record_debug_tool_call(tool_name, args, result, _start)
+        return result
+
+    def _record_debug_tool_call(self, tool_name: str, args: dict,
+                                result: str, start_time: float):
+        """记录工具调用详情到调试收集器（模块 2：诊断报告卡）。"""
+        try:
+            from debug_logger import get_debug_logger
+            dl = get_debug_logger(self.app_dir)
+            elapsed_ms = (time.time() - start_time) * 1000
+            sandbox_paths = {}
+            if self._sandbox is not None:
+                sandbox_paths = {
+                    "host_workspace": self.project_root,
+                    "sandbox_workspace": self._sandbox.map_path(self.project_root),
+                    "path_map": dict(self._sandbox.path_map),
+                }
+            dl.record_tool_call(
+                tool=tool_name,
+                args=args,
+                result=result,
+                elapsed_ms=elapsed_ms,
+                sandbox_paths=sandbox_paths,
+            )
+        except Exception:
+            pass  # 调试记录失败绝不影响主流程
 
     def _check_tool_permission(self, tool_name: str, args: dict):
         """检查工具执行权限。"""
@@ -213,26 +247,43 @@ class AsyncToolExecutor:
     # ── 路径安全 ──
 
     def _safe_path(self, path: str) -> str:
-        """验证并规范化路径，确保在工作区范围内。"""
-        # ★ 统一转为相对路径：避免 LLM 传入绝对路径导致 os.path.join 忽略 project_root，
-        # 以及 Windows 大小写差异导致的 startswith 失败。
-        if os.path.isabs(path):
-            try:
-                rel = os.path.relpath(path, self.project_root)
-                if not rel.startswith("..") or rel == ".":
-                    path = rel
-            except ValueError:
-                pass  # 跨盘符等无法计算相对路径的情况，保持原路径让后续检查处理
+        """验证并规范化路径，确保在工作区范围内。
 
-        # NORP 安全系统：路径越界检查
-        result = self.norp_safe.check_path(path, workspace_root=self.project_root, task_id=self.task_id)
+        ★ P0-6 修复：改用 pathlib 组件级比较，取代脆弱的前缀字符串检测。
+        处理项：符号链接解析、.. 穿越、~ 展开、环境变量展开、Windows 大小写。
+        """
+        # NORP 安全系统：路径越界语义检查（.. / 环境变量 / 系统目录 / 工作区边界）
+        result = self.norp_safe.check_path(
+            path, workspace_root=self.project_root, task_id=self.task_id)
         if result.blocked:
-            raise ValueError(f"NORP安全系统拦截: {result.reason}（威胁等级: {result.threat_level.value}）")
+            raise ValueError(
+                f"NORP安全系统拦截: {result.reason}（威胁等级: {result.threat_level.value}）")
 
-        full = os.path.abspath(os.path.join(self.project_root, path))
-        if not full.startswith(self.project_root + os.sep) and full != self.project_root:
-            raise ValueError(f"NORP安全系统拦截: 路径越界 - {path}（工作区={self.project_root}）")
-        return full
+        # 结构化解析：resolve 解析符号链接与 ..，组件级比较避免前缀误判
+        base = Path(self.project_root).resolve()
+        try:
+            expanded = os.path.expandvars(os.path.expanduser(str(path)))
+        except Exception:
+            expanded = str(path)
+
+        if os.path.isabs(expanded):
+            candidate = Path(expanded)
+        else:
+            candidate = base / expanded
+
+        try:
+            resolved = candidate.resolve(strict=False)
+        except Exception:
+            resolved = Path(os.path.abspath(str(candidate)))
+
+        # 组件级包含判断（大小写不敏感，兼容 Windows）
+        try:
+            resolved.relative_to(base)
+        except ValueError:
+            raise ValueError(
+                f"NORP安全系统拦截: 路径越界 - {path}（工作区={self.project_root}）")
+
+        return str(resolved)
 
     def _map_to_sandbox(self, host_path: str) -> str:
         """将宿主路径映射为沙箱路径。"""
@@ -244,12 +295,23 @@ class AsyncToolExecutor:
     #  文件操作（带 FileIOQueue 并发检测）
     # ═══════════════════════════════════════════════════════════════
 
+    def _get_vision_config(self) -> dict:
+        """读取视觉相关配置（用于 read_file 视觉分支）。"""
+        if not self.app_dir:
+            return {}
+        try:
+            from config import ConfigManager
+            return ConfigManager(self.app_dir).load()
+        except Exception:
+            return {}
+
     async def _read_file(self, args: dict) -> str:
         """异步读取文件 — 实际 I/O 在线程池中执行，不阻塞事件循环。"""
         path = self._safe_path(args["path"])
         start_line = args.get("start_line")
         end_line = args.get("end_line")
         allow_full = self.allow_full_read_large_files
+        vision_cfg = self._get_vision_config()
 
         # 文件 I/O 队列：获取读权限
         await self.file_io_queue.acquire(self.task_id, path, FileOp.READ)
@@ -258,14 +320,24 @@ class AsyncToolExecutor:
             return await loop.run_in_executor(
                 None,
                 self._read_file_sync,
-                path, start_line, end_line, allow_full,
+                path, start_line, end_line, allow_full, vision_cfg,
             )
         finally:
             self.file_io_queue.release(self.task_id, path, FileOp.READ)
 
     @staticmethod
-    def _read_file_sync(path: str, start_line, end_line, allow_full: bool) -> str:
+    def _read_file_sync(path: str, start_line, end_line, allow_full: bool, vision_cfg: dict = None) -> str:
         """同步读取文件（在线程池中运行）。"""
+        # 视觉文件（图片/视频）：读二进制 → 视觉描述
+        ext = os.path.splitext(path)[1].lower().lstrip(".")
+        if is_visual_ext(ext):
+            try:
+                return describe_visual_file(path, vision_cfg or {})
+            except VisionNotConfigured as e:
+                return f"[视觉未配置] {e}"
+            except Exception as e:
+                return f"[视觉处理失败] {e}"
+
         if start_line is None and end_line is None:
             file_size = os.path.getsize(path)
             MAX_FULL_READ_SIZE = 100 * 1024  # 100KB
@@ -597,8 +669,8 @@ class AsyncToolExecutor:
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=timeout
             )
-            output = ((stdout.decode("utf-8", errors="replace") if stdout else "") +
-                      (stderr.decode("utf-8", errors="replace") if stderr else ""))
+            output = (robust_decode(stdout) if stdout else "") + \
+                     (robust_decode(stderr) if stderr else "")
             if not output.strip():
                 output = f"Command exited with code {proc.returncode}"
             return output.strip()
@@ -863,8 +935,8 @@ class AsyncToolExecutor:
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=120
             )
-            output = ((stdout.decode("utf-8", errors="replace") if stdout else "") +
-                      (stderr.decode("utf-8", errors="replace") if stderr else ""))
+            output = (robust_decode(stdout) if stdout else "") + \
+                     (robust_decode(stderr) if stderr else "")
             return output.strip() or f"Exit code: {proc.returncode}"
         except asyncio.TimeoutError:
             self.lifecycle_manager.stop_task(self.task_id, reason="install_timeout")
@@ -891,8 +963,8 @@ class AsyncToolExecutor:
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc2.communicate()
-            output = (stdout.decode("utf-8", errors="replace") if stdout else "") + \
-                     (stderr.decode("utf-8", errors="replace") if stderr else "")
+            output = (robust_decode(stdout) if stdout else "") + \
+                     (robust_decode(stderr) if stderr else "")
             return output.strip()
 
         try:
@@ -951,7 +1023,15 @@ class AsyncToolExecutor:
     # ── 清理 ──
 
     async def cleanup(self):
-        """清理资源。"""
+        """清理资源。
+
+        ★ P0-7 修复：取消语义 —— 终止任务关联的沙箱进程树（杀整个进程组），
+        再释放沙箱，确保用户停止任务后命令执行的子进程树被完整终止。
+        """
+        try:
+            await self.sandbox_pool.kill_task_sandbox(self.task_id)
+        except Exception:
+            pass
         await self.release_sandbox()
 
     # ═══════════════════════════════════════════════════════════════

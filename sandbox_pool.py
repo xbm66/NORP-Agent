@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Optional, Dict, List, Set
 from contextlib import asynccontextmanager
 
+from agent_shared import robust_decode
+
 
 MAX_SANDBOXES = 8
 
@@ -82,11 +84,16 @@ class SandboxPool:
         return sum(1 for s in self._sandboxes if not s.in_use)
 
     def get_stats(self) -> dict:
+        # 沙箱池为懒加载：只有 acquire 时才真正创建子进程沙箱。
+        # 因此「总沙箱数」展示为池容量（MAX_SANDBOXES），「已创建」展示
+        # 当前实际实例数，避免初始状态下 total/available/in_use 全是 0 的困惑。
+        in_use = sum(1 for s in self._sandboxes if s.in_use)
         return {
-            "total": self.total,
-            "available": self.available_count,
-            "in_use": self.total - self.available_count,
-            "max": MAX_SANDBOXES,
+            "total": MAX_SANDBOXES,               # 总沙箱数（池容量）
+            "available": MAX_SANDBOXES - in_use,  # 可用
+            "in_use": in_use,                     # 占用中
+            "max": MAX_SANDBOXES,                 # 上限
+            "created": len(self._sandboxes),      # 已创建实例数（懒加载）
         }
 
     async def acquire(self, task_id: str, workspace_root: str = "",
@@ -150,13 +157,22 @@ class SandboxPool:
             self._sandboxes.clear()
 
     async def kill_task_sandbox(self, task_id: str):
-        """强制终止指定任务占用的沙箱（用于生命周期管理）。"""
+        """强制终止指定任务占用的沙箱（用于生命周期管理 / 取消语义）。
+
+        ★ P0-7 修复：杀整个沙箱进程树后，将沙箱从池中移除（避免复用
+        一个进程已被杀死的空壳沙箱），下次 acquire 会重新创建。
+        """
         async with self._lock:
+            to_remove = []
             for sb in self._sandboxes:
                 if sb.owner_task_id == task_id:
                     await self._stop_sandbox(sb, force=True)
                     sb.in_use = False
                     sb.owner_task_id = ""
+                    to_remove.append(sb)
+            for sb in to_remove:
+                if sb in self._sandboxes:
+                    self._sandboxes.remove(sb)
 
     def _setup_path_map(self, sb: Sandbox, workspace_root: str,
                         extra_paths: Optional[Dict[str, str]] = None):
@@ -290,7 +306,7 @@ class SandboxPool:
         exit_code, output = container.exec_run(
             cmd, workdir=workdir, stdout=True, stderr=True,
         )
-        result = output.decode("utf-8", errors="replace") if output else ""
+        result = robust_decode(output) if output else ""
         if not result.strip():
             result = f"Exit code: {exit_code}"
         return result
@@ -320,8 +336,8 @@ class SandboxPool:
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=timeout
             )
-            output = (stdout.decode("utf-8", errors="replace") if stdout else "") + \
-                     (stderr.decode("utf-8", errors="replace") if stderr else "")
+            output = (robust_decode(stdout) if stdout else "") + \
+                     (robust_decode(stderr) if stderr else "")
             if not output.strip():
                 output = f"Command exited with code {proc.returncode}"
             return output.strip()

@@ -16,6 +16,10 @@ from plugin_system.security import (
     PluginImportBlocker, StrictImportBlocker, ResourceLimiter,
     _loading_plugin,
 )
+from plugin_system.signature import SignatureVerifier, SignatureStatus
+from plugin_system.network_policy import NetworkPolicy
+from plugin_system.approval import ApprovalPolicy
+from plugin_system.plugin_host import PluginHostClient
 
 
 # ── Hook names (all 15 hooks across 4 layers) ──────────────────────
@@ -60,7 +64,8 @@ class PluginInfo:
     """Lightweight metadata for one plugin instance."""
 
     __slots__ = ("name", "path", "version", "publisher", "description",
-                 "enabled", "error", "tools", "module", "_hook_names")
+                 "enabled", "error", "tools", "module", "_hook_names",
+                 "signature_status", "trusted", "isolation", "has_execute")
 
     def __init__(self, name: str, path: str):
         self.name = name
@@ -73,6 +78,10 @@ class PluginInfo:
         self.tools: List[dict] = []
         self.module: Any = None
         self._hook_names: List[str] = []
+        self.signature_status: str = ""     # 签名校验状态
+        self.trusted: bool = False          # 是否受信任签名
+        self.isolation: str = "process"     # 该插件实际运行模式
+        self.has_execute: bool = False      # 是否定义 execute()
 
     @property
     def hook_names(self) -> List[str]:
@@ -143,6 +152,20 @@ class PluginManager:
         self._strict_blocker: Optional[StrictImportBlocker] = None
         self._audit_results: Dict[str, List[dict]] = {}  # plugin_name → issues
 
+        # ── P0-1 进程隔离：插件宿主子进程客户端 ──
+        self._isolation: str = (config or {}).get("plugin_isolation", "process")
+        if self._isolation not in ("process", "inprocess"):
+            self._isolation = "process"
+        self._host_client: Optional[PluginHostClient] = None
+        self._host_ok: bool = False  # 宿主进程是否成功启动
+
+        # ── P0-5 签名校验 ──
+        self.signature_verifier = SignatureVerifier(config or {})
+        # ── P0-4 网络策略 ──
+        self.network_policy = NetworkPolicy(config or {})
+        # ── P0-8 人工审批 ──
+        self.approval = ApprovalPolicy(config or {})
+
     # ── Properties ──────────────────────────────────────────────────
 
     @property
@@ -171,8 +194,18 @@ class PluginManager:
             self._contexts.clear()
             self._audit_results.clear()
 
-        # ── Setup import blockers before loading ──
-        self._setup_import_blockers()
+        # ── 清理残留的插件模块，防止重复加载时旧模块副作用累积 ──
+        # （例如 norp_pet_bridge 在 import 时会启动宠物 / watchdog 线程，
+        #   若不清理 sys.modules，重复 discover_and_load 会导致这些副作用重复执行）
+        stale_modules = [m for m in list(sys.modules) if m.startswith("vibe_plugin_")]
+        for mod_name in stale_modules:
+            sys.modules.pop(mod_name, None)
+
+        # ── 启动进程隔离宿主 / 或设置进程内 import blocker ──
+        if self._isolation == "process":
+            self._ensure_host_started()
+        else:
+            self._setup_import_blockers()
 
         # Deduplicate directories by realpath to prevent scanning the same
         # physical location twice (e.g. "official_plugins" vs "./official_plugins")
@@ -185,6 +218,11 @@ class PluginManager:
             if real not in seen_dirs:
                 seen_dirs.add(real)
                 unique_dirs.append(d)
+
+        # ★ 按插件入口文件的 realpath 去重：同一物理文件（即使通过
+        #   嵌套目录 / 符号链接 / 重复配置被扫描到两次）只加载一次，
+        #   从根本上杜绝"重复插件 → 重复工具"的问题。
+        seen_files: set = set()
 
         try:
             for d in unique_dirs:
@@ -200,6 +238,10 @@ class PluginManager:
                     if entry.endswith(".py") and os.path.isfile(full):
                         if entry == "__init__.py":
                             continue  # skip package init files
+                        real_full = os.path.realpath(full)
+                        if real_full in seen_files:
+                            continue
+                        seen_files.add(real_full)
                         self._load_from_file(entry[:-3], full)
 
                     # ── package with manifest.json ──
@@ -215,15 +257,27 @@ class PluginManager:
                             entry_file = manifest.get("entry", "plugin.py")
                             entry_path = os.path.join(full, entry_file)
                             if os.path.isfile(entry_path):
+                                real_entry = os.path.realpath(entry_path)
+                                if real_entry in seen_files:
+                                    continue
+                                seen_files.add(real_entry)
                                 self._load_from_file(name, entry_path,
                                                      manifest=manifest)
         finally:
-            # Always tear down blockers
-            self._teardown_import_blockers()
+            # Always tear down blockers（仅 inprocess 模式需要）
+            if self._isolation != "process":
+                self._teardown_import_blockers()
 
     def shutdown(self):
         """Clean up plugin manager resources (call at agent shutdown)."""
         self._teardown_import_blockers()
+        if self._host_client is not None:
+            try:
+                self._host_client.shutdown()
+            except Exception:
+                pass
+            self._host_client = None
+            self._host_ok = False
         self._reap_zombies()
 
     def unload_plugin(self, plugin_name: str) -> bool:
@@ -283,8 +337,14 @@ class PluginManager:
             self._strict_blocker = None
 
     def update_security_config(self, config: dict):
-        """Update security settings and re-create the security module."""
+        """Update security settings and re-create the security modules."""
         self.security = PluginSecurity(config or {})
+        self.signature_verifier = SignatureVerifier(config or {})
+        self.network_policy = NetworkPolicy(config or {})
+        self.approval = ApprovalPolicy(config or {})
+        new_isolation = (config or {}).get("plugin_isolation", "process")
+        if new_isolation in ("process", "inprocess"):
+            self._isolation = new_isolation
 
     def get_audit_results(self) -> Dict[str, List[dict]]:
         """Return security audit results for all plugins (keyed by name)."""
@@ -294,23 +354,22 @@ class PluginManager:
     def get_tools(self) -> List[dict]:
         """Return the merged tool definitions from all enabled plugins.
 
-        按工具名去重：不同插件若声明了同名工具，只返回第一个。
-        （_load_from_file 的同名守卫只保护 _tool_registry 调度表，
-        插件自身 info.tools 里仍可能残留重复定义；若不在这里去重，
-        组装给 API 的工具列表会出现重名，Anthropic 兼容端点会
-        返回 400 'Tool names must be unique'。）
+        ★ 按工具名去重：即便注册表里存在残留的重复插件条目，也保证
+        同一个工具名只会返回一次，避免 LLM 收到重复的工具定义而产生
+        "重复工具调用"。
         """
         tools: List[dict] = []
-        seen = set()
+        seen: set = set()
         with self._lock:
             for info in self._plugins.values():
-                if info.enabled and info.tools:
-                    for tool in info.tools:
-                        tname = tool.get("function", {}).get("name", "")
-                        if not tname or tname in seen:
-                            continue
-                        seen.add(tname)
-                        tools.append(tool)
+                if not info.enabled or not info.tools:
+                    continue
+                for tool in info.tools:
+                    tname = tool.get("function", {}).get("name", "")
+                    if not tname or tname in seen:
+                        continue
+                    seen.add(tname)
+                    tools.append(tool)
         return tools
 
     def get_all_plugins(self) -> List[dict]:
@@ -329,6 +388,9 @@ class PluginManager:
                     "tool_count": len(info.tools) if info.tools else 0,
                     "hook_count": len(info.hook_names),
                     "hook_names": info.hook_names,
+                    "signature_status": info.signature_status,
+                    "trusted": info.trusted,
+                    "isolation": info.isolation,
                 }
                 # Attach audit results if available
                 audit = self._audit_results.get(info.name)
@@ -347,11 +409,17 @@ class PluginManager:
         """Dispatch a tool call to the plugin that registered it."""
         with self._lock:
             entry = self._tool_registry.get(tool_name)
+            info = self._plugins.get(entry[0]) if entry else None
 
         if entry is None:
             return f"Error: unknown plugin tool '{tool_name}'"
 
         plugin_name, execute_fn = entry
+
+        # ── 进程隔离模式：通过宿主子进程执行 ──
+        if info is not None and info.isolation == "process":
+            return self._remote_execute(plugin_name, tool_name, args)
+
         if not callable(execute_fn):
             return f"Error: plugin '{plugin_name}' has no execute() function"
 
@@ -362,12 +430,35 @@ class PluginManager:
         except Exception:
             return f"Plugin execution failed:\n{traceback.format_exc()}"
 
+    # ── 远程执行辅助（进程隔离） ─────────────────────────────────
+
+    def _remote_execute(self, plugin_name: str, tool_name: str, args: dict) -> str:
+        client = self._host_client
+        if client is None or not client.is_alive():
+            return f"Error: plugin host process is not running (plugin '{plugin_name}')"
+        try:
+            result = client.request({
+                "op": "call_tool",
+                "plugin": plugin_name,
+                "tool": tool_name,
+                "args": args,
+                "context": self._context_payload(),
+            }, timeout=120.0)
+            out = result.get("output") if isinstance(result, dict) else result
+            return out if isinstance(out, str) else str(out)
+        except Exception as exc:
+            return f"Plugin execution failed (IPC): {exc}"
+
     def update_config_snapshot(self, config: dict):
         """Refresh the read-only config snapshot shared with plugins."""
         self._config_snapshot = config.copy() if config else {}
 
     def set_step(self, step: int):
         self._step = step
+
+    def set_total_usage(self, usage: dict):
+        """更新累计 token 用量（传递给子进程插件上下文）。"""
+        self._total_usage = usage or {}
 
     # ── Hook dispatchers (one per hook) ─────────────────────────────
 
@@ -428,6 +519,10 @@ class PluginManager:
         if result is None:
             return args  # all listeners returned None → pass through
         if isinstance(result, dict):
+            # ── 数据变形追踪：before_tool_call 修改了参数 ──
+            if result != args:
+                self._record_hook_debug("before_tool_call", "(plugin)",
+                                        action="mutated", before=args, after=result)
             return result
         return args  # unrecognised return value → pass through
 
@@ -437,6 +532,10 @@ class PluginManager:
         hook_result = self._broadcast_mutating(
             "after_tool_call", lambda ctx: (tool_name, args, result, ctx))
         if hook_result is not None and isinstance(hook_result, str):
+            # ── 数据变形追踪：after_tool_call 修改了返回值 ──
+            if hook_result != result:
+                self._record_hook_debug("after_tool_call", "(plugin)",
+                                        action="mutated", before=result, after=hook_result)
             return hook_result
         return result
 
@@ -456,12 +555,153 @@ class PluginManager:
     def fire_usage_update(self, usage: dict):
         self._broadcast("on_usage_update", lambda ctx: (usage, ctx))
 
+    # ── 调试记录 ────────────────────────────────────────────────────
+
+    def _record_hook_debug(self, hook_name: str, plugin_name: str,
+                           action: str = "fired", before=None, after=None):
+        """将钩子触发记录到调试收集器（模块 4：插件钩子触发记录）。
+
+        惰性 import + 全异常吞掉，确保调试记录绝不影响插件系统主流程。
+        """
+        try:
+            from debug_logger import get_debug_logger
+            get_debug_logger(self.app_dir).record_hook(
+                hook_name=hook_name, plugin_name=plugin_name,
+                action=action, before=before, after=after)
+        except Exception:
+            pass
+
     # ── Internal helpers ────────────────────────────────────────────
+
+    # ── 进程隔离 / 安全分级辅助 ──────────────────────────────────
+
+    def _ensure_host_started(self) -> bool:
+        """确保插件宿主子进程已启动。"""
+        if self._host_client is not None and self._host_ok:
+            return True
+        client = PluginHostClient(app_dir=self.app_dir, project_root=self.project_root)
+        ok = client.start()
+        self._host_client = client
+        self._host_ok = ok
+        if not ok:
+            _log.warning("插件宿主子进程启动失败，将拒绝加载插件（进程隔离开启）")
+        return ok
+
+    def _effective_security(self, sig_result) -> Tuple[str, str]:
+        """根据签名结果决定该插件的有效审计级别与导入限制。
+
+        信任分级：
+          - trusted（签名有效且公钥受信任）→ 审计放宽为 warn、导入限制 off
+          - 其他（未签名 / 未信任）→ 沿用用户配置（默认 block / strict）
+          - invalid 不进入此分支（在 _load_from_file 中已拒绝）
+        """
+        if sig_result.status == SignatureStatus.TRUSTED:
+            return "warn", "off"
+        return self.security.audit_level, self.security.import_restriction
+
+    def _context_payload(self) -> dict:
+        """构造传给子进程的插件上下文（只读字段）。"""
+        return {
+            "project_root": self.project_root,
+            "app_dir": self.app_dir,
+            "config": self._config_snapshot.copy() if self._config_snapshot else {},
+            "current_step": getattr(self, "_step", 0),
+            "total_usage": getattr(self, "_total_usage", {}),
+        }
+
+    def _load_remote(self, info: PluginInfo, name: str, path: str,
+                     manifest: dict, import_restrict: str):
+        """通过宿主子进程加载插件（进程隔离）。"""
+        client = self._host_client
+        if client is None:
+            raise RuntimeError("插件宿主进程未初始化")
+        desc = client.request({
+            "op": "load",
+            "plugin_name": name,
+            "path": path,
+            "manifest": manifest,
+            "security_config": {
+                "audit_level": self.security.audit_level,
+                "import_restrict": import_restrict,
+            },
+            "context": self._context_payload(),
+        }, timeout=120.0)
+
+        header_name = desc.get("name", "")
+        if isinstance(header_name, str) and header_name.strip():
+            info.name = header_name.strip()
+        pub = desc.get("publisher")
+        if isinstance(pub, str) and pub.strip():
+            info.publisher = pub.strip()
+        ver = desc.get("version")
+        if isinstance(ver, str) and ver.strip() and not manifest:
+            info.version = ver.strip()
+        dsc = desc.get("description")
+        if isinstance(dsc, str) and dsc.strip() and not manifest:
+            info.description = dsc.strip()
+
+        tools = desc.get("tools")
+        info.tools = tools if isinstance(tools, list) else []
+        hooks = desc.get("hook_names")
+        info._hook_names = [h for h in hooks if h in HOOK_NAMES] if isinstance(hooks, list) else []
+        info.has_execute = bool(desc.get("has_execute", False))
+        info.module = None  # 模块驻留在子进程
+        info.isolation = "process"
+
+    def _load_inprocess(self, info: PluginInfo, name: str, path: str,
+                        manifest: dict):
+        """进程内加载插件（仅 inprocess 隔离模式 / 调试用）。"""
+        spec = importlib.util.spec_from_file_location(
+            f"vibe_plugin_{name}", path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Cannot load module spec for {path}")
+
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+
+        # ── Resource limits (if enabled) ──
+        limiter = None
+        if self.security.resource_limit:
+            limiter = ResourceLimiter(max_memory_mb=512, max_cpu_seconds=30)
+            limiter.enable()
+
+        try:
+            _loading_plugin.active = True
+            spec.loader.exec_module(module)
+        finally:
+            _loading_plugin.active = False
+            if limiter:
+                limiter.disable()
+
+        info.module = module
+        info.isolation = "inprocess"
+
+        header_name = getattr(module, "PLUGIN_NAME", None)
+        if isinstance(header_name, str) and header_name.strip():
+            info.name = header_name.strip()
+        pub = getattr(module, "PLUGIN_PUBLISHER", None)
+        if isinstance(pub, str):
+            info.publisher = pub.strip()
+        ver = getattr(module, "PLUGIN_VERSION", None)
+        if isinstance(ver, str) and not manifest:
+            info.version = ver.strip()
+        dsc = getattr(module, "PLUGIN_DESCRIPTION", None)
+        if isinstance(dsc, str) and not manifest:
+            info.description = dsc.strip()
+
+        tools = getattr(module, "TOOLS", None)
+        info.tools = tools if isinstance(tools, list) else []
+        info.has_execute = callable(getattr(module, "execute", None))
+        for hook_name in HOOK_NAMES:
+            fn = getattr(module, hook_name, None)
+            if callable(fn):
+                info._hook_names.append(hook_name)
 
     def _load_from_file(self, name: str, path: str, *,
                         manifest: dict = None):
-        """Import a plugin module and register its tools + hooks."""
+        """Load a plugin (isolated host process or in-process) and register it."""
         info = PluginInfo(name, path)
+        info.isolation = self._isolation
 
         if manifest:
             info.version = manifest.get("version", info.version)
@@ -477,8 +717,23 @@ class PluginManager:
                 self._plugins[name] = info
             return
 
+        # ── P0-5 签名校验 ──
+        sig_result = self.signature_verifier.verify(path, manifest=manifest)
+        info.signature_status = sig_result.status
+        info.trusted = sig_result.is_trusted
+
+        if sig_result.status == SignatureStatus.INVALID:
+            info.error = f"插件签名校验失败：{sig_result.reason}"
+            info.enabled = False
+            with self._lock:
+                self._plugins[name] = info
+            return
+
+        # ── 信任分级：决定有效审计级别与导入限制 ──
+        effective_audit, effective_import_restrict = self._effective_security(sig_result)
+
         # ── Security audit (before loading) ──
-        audit_issues, audit_allowed = self.security.audit_file(path)
+        audit_issues, audit_allowed = self.security.audit_file(path, audit_level=effective_audit)
         self._audit_results[name] = [i.to_dict() for i in audit_issues]
 
         if not audit_allowed:
@@ -497,7 +752,7 @@ class PluginManager:
             return
 
         # If only warnings, log them but proceed
-        if audit_issues and self.security.audit_level == "warn":
+        if audit_issues and effective_audit == "warn":
             warnings = [i for i in audit_issues if i.severity == Severity.WARNING]
             if warnings:
                 print(f"[PluginSecurity] {name}: {len(warnings)} warning(s) "
@@ -512,72 +767,17 @@ class PluginManager:
                 self._plugins[name] = info
             return
 
+        # ── 加载（隔离模式） ──
         try:
-            spec = importlib.util.spec_from_file_location(
-                f"vibe_plugin_{name}", path)
-            if spec is None or spec.loader is None:
-                raise RuntimeError(f"Cannot load module spec for {path}")
-
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[spec.name] = module
-
-            # ── Resource limits (if enabled) ──
-            limiter = None
-            if self.security.resource_limit:
-                limiter = ResourceLimiter(max_memory_mb=512, max_cpu_seconds=30)
-                limiter.enable()
-
-            try:
-                # Signal to PluginImportBlocker that a plugin is loading
-                # (avoids frame-walking on every import inside the plugin)
-                _loading_plugin.active = True
-                spec.loader.exec_module(module)
-            finally:
-                _loading_plugin.active = False
-                if limiter:
-                    limiter.disable()
-
-            info.module = module
-
-            # ── Read plugin header metadata ──
-            plugin_name_from_header = getattr(module, "PLUGIN_NAME", None)
-            if plugin_name_from_header and isinstance(plugin_name_from_header, str) and plugin_name_from_header.strip():
-                info.name = plugin_name_from_header.strip()
-                # Re-check if this plugin name is already registered
-                # (the caller passed filename-based name; update registry key if needed)
-
-            plugin_publisher = getattr(module, "PLUGIN_PUBLISHER", None)
-            if plugin_publisher and isinstance(plugin_publisher, str):
-                info.publisher = plugin_publisher.strip()
-
-            plugin_version = getattr(module, "PLUGIN_VERSION", None)
-            if plugin_version and isinstance(plugin_version, str) and not manifest:
-                # manifest version takes priority; only use header if no manifest
-                info.version = plugin_version.strip()
-
-            plugin_desc = getattr(module, "PLUGIN_DESCRIPTION", None)
-            if plugin_desc and isinstance(plugin_desc, str) and not manifest:
-                info.description = plugin_desc.strip()
-
-            # ── tools ──
-            tools = getattr(module, "TOOLS", None)
-            if isinstance(tools, list):
-                info.tools = tools
+            if self._isolation == "process":
+                if not self._ensure_host_started():
+                    raise RuntimeError(
+                        "进程级隔离已开启但宿主子进程无法启动，已拒绝加载插件。"
+                        "可在设置中临时切换为 inprocess 模式（不推荐）后重试。")
+                self._load_remote(info, name, path, manifest, effective_import_restrict)
             else:
-                info.tools = []
-
-            execute_fn = getattr(module, "execute", None)
-
-            # ── Collect hook names BEFORE registration ──
-            # 必须先在锁外收集，这样才能在 skip check 中正确判断
-            # （之前的实现在锁内边收集边注册，若 skip 时 return 会导致残留）
-            for hook_name in HOOK_NAMES:
-                fn = getattr(module, hook_name, None)
-                if callable(fn):
-                    info._hook_names.append(hook_name)
-
+                self._load_inprocess(info, name, path, manifest)
         except ImportError as exc:
-            # Import blocked by security – surface clearly
             info.error = f"Import blocked: {exc}"
             info.enabled = False
             traceback.print_exc()
@@ -587,20 +787,16 @@ class PluginManager:
             traceback.print_exc()
 
         # ── Skip files that don't define any plugin interface ──
-        # ★ 必须在注册工具/钩子之前执行此检查，防止残留注册
-        # ★ 但如果安全审计发现了问题，仍然注册以便前端显示审计结果
-        if not info.tools and not info.hook_names and not callable(getattr(info.module, 'execute', None)):
+        if not info.tools and not info.hook_names and not info.has_execute:
             if not self._audit_results.get(name):
                 _log.debug("Skipping '%s' – no TOOLS, hooks, or execute() defined", name)
                 return  # not a plugin
-            # Has audit results – register as blocked plugin for visibility
             info.enabled = False
             if not info.error:
                 info.error = "Plugin module failed to load (see audit log)"
 
         # ── 通过了所有检查，现在才安全地注册工具和钩子 ──
         resolved_name = info.name
-        execute_fn = getattr(info.module, "execute", None)
 
         with self._lock:
             # ── 同名插件覆盖：先卸载旧版本的工具 & 钩子 ──
@@ -610,24 +806,24 @@ class PluginManager:
                     "Plugin '%s' (%s) overwrites previously loaded '%s'",
                     resolved_name, info.path, old_info.path,
                 )
-                # 移除旧工具
                 for old_tool in (old_info.tools or []):
                     old_tname = old_tool.get("function", {}).get("name", "")
-                    if old_tname in self._tool_registry:
+                    if not old_tname:
+                        continue
+                    entry = self._tool_registry.get(old_tname)
+                    if entry is not None and entry[0] == resolved_name:
                         del self._tool_registry[old_tname]
-                # 移除旧钩子
                 for hook_name in HOOK_NAMES:
                     self._hooks[hook_name] = [
                         (pn, fn) for (pn, fn) in self._hooks[hook_name]
                         if pn != resolved_name
                     ]
 
-            # 注册工具
+            # 注册工具（process 模式下 execute_fn 为 None，走 RPC）
             for tool in info.tools:
                 func = tool.get("function", {})
                 tname = func.get("name", "")
                 if tname:
-                    # Guard against duplicate tool names — log warning, don't crash
                     if tname in self._tool_registry:
                         existing = self._tool_registry[tname][0]
                         if existing != resolved_name:
@@ -637,19 +833,18 @@ class PluginManager:
                                 tname, resolved_name, info.path, existing,
                             )
                         continue
+                    execute_fn = getattr(info.module, "execute", None)
                     self._tool_registry[tname] = (resolved_name, execute_fn)
 
-            # 注册钩子
+            # 注册钩子（process 模式下 fn 为 None，走 RPC）
             for hook_name in info._hook_names:
-                fn = getattr(info.module, hook_name, None)
-                if callable(fn):
-                    # 去重：避免同一插件名+钩子名重复注册
-                    already = any(
-                        pn == resolved_name
-                        for pn, _ in self._hooks[hook_name]
-                    )
-                    if not already:
-                        self._hooks[hook_name].append((resolved_name, fn))
+                fn = getattr(info.module, hook_name, None) if info.module is not None else None
+                already = any(
+                    pn == resolved_name
+                    for pn, _ in self._hooks[hook_name]
+                )
+                if not already:
+                    self._hooks[hook_name].append((resolved_name, fn))
 
             # 加入插件注册表
             self._plugins[resolved_name] = info
@@ -682,6 +877,11 @@ class PluginManager:
             listeners = list(self._hooks.get(hook_name, []))
 
         for plugin_name, fn in listeners:
+            self._record_hook_debug(hook_name, plugin_name, "fired")
+            # ── 进程隔离模式：RPC 触发钩子 ──
+            if fn is None:
+                self._remote_fire(plugin_name, hook_name, build_args)
+                continue
             ctx = self._get_context(plugin_name)
             try:
                 args = build_args(ctx)
@@ -702,6 +902,13 @@ class PluginManager:
             listeners = list(self._hooks.get(hook_name, []))
 
         for plugin_name, fn in listeners:
+            self._record_hook_debug(hook_name, plugin_name, "fired")
+            # ── 进程隔离模式：RPC 触发钩子并取返回值 ──
+            if fn is None:
+                result = self._remote_fire_mutating(plugin_name, hook_name, build_args)
+                if result is not None:
+                    return result
+                continue
             ctx = self._get_context(plugin_name)
             try:
                 args = build_args(ctx)
@@ -714,6 +921,71 @@ class PluginManager:
             except Exception:
                 continue
         return None
+
+    # ── 远程钩子触发辅助（进程隔离） ───────────────────────────────
+
+    @staticmethod
+    def _strip_ctx_from_args(args) -> list:
+        """把 build_args 产物中末尾的 PluginContext 对象去掉。
+
+        子进程会 append 自己的 PluginContext 作为钩子最后一个参数，
+        主进程侧的 ctx 对象不可 JSON 序列化，必须在此剥离。
+        """
+        if isinstance(args, tuple):
+            args_list = list(args)
+        elif args is not None:
+            args_list = [args]
+        else:
+            args_list = []
+        if args_list and isinstance(args_list[-1], PluginContext):
+            args_list = args_list[:-1]
+        return args_list
+
+    def _remote_fire(self, plugin_name: str, hook_name: str, build_args: Callable):
+        client = self._host_client
+        if client is None or not client.is_alive():
+            return
+        ctx = self._get_context(plugin_name)
+        try:
+            args = build_args(ctx)
+        except Exception:
+            return
+        args_list = self._strip_ctx_from_args(args)
+        try:
+            client.request({
+                "op": "fire_hook",
+                "plugin": plugin_name,
+                "hook": hook_name,
+                "args": args_list,
+                "context": self._context_payload(),
+            }, timeout=HOOK_TIMEOUT)
+        except Exception:
+            pass  # hook errors never crash the agent
+
+    def _remote_fire_mutating(self, plugin_name: str, hook_name: str,
+                              build_args: Callable):
+        client = self._host_client
+        if client is None or not client.is_alive():
+            return None
+        ctx = self._get_context(plugin_name)
+        try:
+            args = build_args(ctx)
+        except Exception:
+            return None
+        args_list = self._strip_ctx_from_args(args)
+        try:
+            result = client.request({
+                "op": "fire_hook",
+                "plugin": plugin_name,
+                "hook": hook_name,
+                "args": args_list,
+                "context": self._context_payload(),
+            }, timeout=HOOK_TIMEOUT)
+            if isinstance(result, dict):
+                return result.get("result")
+            return result
+        except Exception:
+            return None
 
     @staticmethod
     def _call_with_timeout(fn: Callable, *args, **kwargs):

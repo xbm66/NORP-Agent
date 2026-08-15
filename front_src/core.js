@@ -7,6 +7,12 @@ var currentReplyEl = null;
 var currentCmdEl = null;
 var selectedFiles = [];
 
+// ── 平滑思考渲染（打字机效果）──
+// 后端把思考过程按 ~80 字符批量推送，前端一次性蹦出大段显得卡顿。
+// 这里用 requestAnimationFrame 逐字平滑渲染，让视觉连贯。
+var SMOOTH_THINK_CHARS_PER_FRAME = 3;   // 每帧渲染字符数（约 60fps → ~180 字/秒）
+var SMOOTH_THINK_FAST_CHARS = 24;       // 思考块结束时加速刷完的每帧字符数
+
 // Default content refs point to the default panel — updated by switchToTab()
 var chatContent = document.getElementById('chat-content-default');
 var cmdContent = document.getElementById('cmd-content-default');
@@ -36,8 +42,11 @@ var toastContainer = document.getElementById('toast-container');
 var confirmWriteModal = document.getElementById('confirm-write-modal');
 var confirmWriteMessage = document.getElementById('confirm-write-message');
 var confirmWriteDetail = document.getElementById('confirm-write-detail');
+var confirmWriteTitle = document.getElementById('confirm-write-title');
 var confirmWriteConfirmBtn = document.getElementById('confirm-write-confirm-btn');
 var confirmWriteCancelBtn = document.getElementById('confirm-write-cancel-btn');
+var confirmWriteNoMoreBtn = document.getElementById('confirm-write-nomore-btn');
+var confirmWriteNoMoreHint = document.getElementById('confirm-write-nomore-hint');
 var _pendingConfirmSessionId = '';
 var _pendingAskSessionId = '';
 var _pendingAskQuestionRaw = '';
@@ -870,9 +879,50 @@ function createUserMessageDOM(text) {
 function appendError(msg) {
     var div = document.createElement('div');
     div.className = 'error-text';
-    div.textContent = msg;
+    div.textContent = translateErrorMsg(msg);
     chatContent.appendChild(div);
     scrollChatToBottom();
+}
+
+// 前端轻量错误转义：把英文技术错误 / 堆栈转成用户能看懂的提示。
+// 后端 error_i18n.py 已做主要转义，这里兜底处理前端本地捕获的异常。
+function translateErrorMsg(msg) {
+    if (!msg) return msg;
+    var s = String(msg);
+    var low = s.toLowerCase();
+    // 堆栈信息：提取最后一行真正的错误描述
+    if (low.indexOf('traceback') !== -1 || s.indexOf('  File ') !== -1) {
+        var lines = s.split('\n');
+        for (var i = lines.length - 1; i >= 0; i--) {
+            var line = lines[i].trim();
+            if (line && line.indexOf('File ') !== 0 && line.indexOf('Traceback') !== 0) {
+                s = line;
+                low = s.toLowerCase();
+                break;
+            }
+        }
+    }
+    var map = [
+        ['failed to fetch', '无法连接到后端服务，请检查网络连接。'],
+        ['networkerror', '网络错误，请检查网络连接。'],
+        ['connection refused', '连接被拒绝，后端服务可能未启动。'],
+        ['timed out', '请求超时，请稍后重试。'],
+        ['timeout', '请求超时，请稍后重试。'],
+        ['unicode decode', '文件编码无法识别，可能是二进制文件（图片/视频等）。'],
+        ['unsupported format', '不支持的文件格式。'],
+        ['file too large', '文件过大。'],
+        ['permission denied', '没有权限执行此操作。'],
+        ['not found', '找不到目标资源。'],
+        ['polling error', '轮询后端事件失败'],
+        ['send failed', '发送失败'],
+        ['invalid api key', 'API 密钥无效。'],
+    ];
+    for (var i = 0; i < map.length; i++) {
+        if (low.indexOf(map[i][0]) !== -1) {
+            return map[i][1];
+        }
+    }
+    return s;
 }
 
 function appendAskUser(question) {
@@ -947,13 +997,24 @@ var TOOL_NAMES_EN = {
     'replace_in_file': 'Modify'
 };
 
-function showConfirmWriteModal(tool, path, sessionId) {
+function showConfirmWriteModal(tool, path, sessionId, isPlugin) {
     hideAskUserModal();
     var action = TOOL_NAMES_EN[tool] || tool;
     confirmWriteMessage.textContent = tf('confirm_write_msg', null, action.toLowerCase(), path);
     confirmWriteDetail.textContent = tool === 'delete_file'
         ? t('confirm_delete_warn')
         : t('confirm_overwrite_warn');
+    if (confirmWriteTitle) {
+        confirmWriteTitle.textContent = t('confirm_operation');
+    }
+    // 「不再显示」按钮仅对原生工具确认弹窗可见；插件工具审批弹窗不提供
+    var showNoMore = !isPlugin;
+    if (confirmWriteNoMoreBtn) {
+        confirmWriteNoMoreBtn.style.display = showNoMore ? '' : 'none';
+    }
+    if (confirmWriteNoMoreHint) {
+        confirmWriteNoMoreHint.style.display = showNoMore ? '' : 'none';
+    }
     confirmWriteModal.style.display = 'block';
     statusText.textContent = t('waiting_confirm');
     _pendingConfirmSessionId = sessionId || (getActiveTab() ? getActiveTab().dbId : '');
@@ -971,6 +1032,20 @@ async function handleConfirmWriteConfirm() {
         var sid = _pendingConfirmSessionId || (getActiveTab() ? getActiveTab().dbId : '');
         _pendingConfirmSessionId = '';
         await window.pywebview.api.provide_user_input(sid, '__confirm__');
+    } catch(e) {
+        appendError(t('confirm_btn') + ' ' + t('save_failed') + ': ' + e.message);
+        finishStream();
+    }
+}
+
+async function handleConfirmWriteNoMore() {
+    // 「不再显示」：本次放行 + 后端持久化关闭原生工具确认
+    hideConfirmWriteModal();
+    statusText.textContent = t('running');
+    try {
+        var sid = _pendingConfirmSessionId || (getActiveTab() ? getActiveTab().dbId : '');
+        _pendingConfirmSessionId = '';
+        await window.pywebview.api.provide_user_input(sid, '__confirm_no_more__');
     } catch(e) {
         appendError(t('confirm_btn') + ' ' + t('save_failed') + ': ' + e.message);
         finishStream();
@@ -1004,8 +1079,8 @@ function appendOrAccumulateThinking(text) {
         var content = document.createElement('div');
         content.className = 'reasoning-box';
         content.style.marginBottom = '0';
-        content.dataset.raw = text;
-        content.textContent = text;
+        content.dataset.raw = text;      // 完整文本（真相源），复制/保存依赖它
+        content.textContent = '';        // 显示内容由平滑渲染器逐字填充
 
         details.appendChild(summary);
         details.appendChild(content);
@@ -1015,10 +1090,41 @@ function appendOrAccumulateThinking(text) {
         currentThinkingEl._content = content;
     } else {
         var c = currentThinkingEl._content;
-        c.dataset.raw += text;
-        c.textContent += text;
+        c.dataset.raw += text;           // 只更新真相源，显示进度由渲染器推进
     }
+    _startSmoothThinking(currentThinkingEl._content);
     scrollChatToBottom();
+}
+
+// 启动（或恢复）思考内容的平滑渲染循环
+function _startSmoothThinking(contentEl) {
+    if (!contentEl || contentEl._rafId) return;
+    contentEl._rafId = requestAnimationFrame(function() { _tickSmoothThinking(contentEl); });
+}
+
+// 每帧把思考内容向完整文本推进若干字符，实现逐字平滑显示
+function _tickSmoothThinking(contentEl) {
+    if (!contentEl || !contentEl.parentNode) {
+        contentEl._rafId = null;
+        return;
+    }
+    var raw = contentEl.dataset.raw || '';
+    var shown = contentEl.textContent || '';
+    if (shown.length < raw.length) {
+        var perFrame = contentEl._fast ? SMOOTH_THINK_FAST_CHARS : SMOOTH_THINK_CHARS_PER_FRAME;
+        var target = Math.min(raw.length, shown.length + perFrame);
+        contentEl.textContent = raw.substring(0, target);
+        // 滚动所属面板到底部（用 closest 精确定位，避免跨 tab 误滚动）
+        var scroller = contentEl.closest('.panel-content');
+        if (scroller && isNearBottom(scroller)) {
+            scroller.scrollTop = scroller.scrollHeight;
+        }
+    }
+    if ((contentEl.textContent || '').length < raw.length) {
+        contentEl._rafId = requestAnimationFrame(function() { _tickSmoothThinking(contentEl); });
+    } else {
+        contentEl._rafId = null;
+    }
 }
 
 function appendOrAccumulateReply(text) {
@@ -1131,6 +1237,21 @@ function finalizeCurrentThinking() {
         // Update summary to indicate this phase is complete
         var sum = currentThinkingEl.querySelector('summary');
         if (sum) sum.textContent = '\u2705 ' + t('thinking');
+        // 切换到快速模式，让尚未渲染完的思考内容平滑地加速刷完，
+        // 而不是瞬间跳变（思考块结束通常紧接着回复开始，视觉更自然）
+        var content = currentThinkingEl._content;
+        if (content && (content.textContent || '').length < (content.dataset.raw || '').length) {
+            content._fast = true;
+            _startSmoothThinking(content);
+            // 兜底：窗口隐藏时 RAF 会被节流/暂停，超时后强制补全，确保内容不残缺
+            var raw = content.dataset.raw || '';
+            setTimeout(function() {
+                if (content.parentNode && (content.textContent || '').length < raw.length) {
+                    content.textContent = raw;
+                    if (content._rafId) { cancelAnimationFrame(content._rafId); content._rafId = null; }
+                }
+            }, 300);
+        }
         currentThinkingEl = null;
     }
 }
@@ -1186,10 +1307,10 @@ function handleEvent(event, tab) {
         var wcSessionId = tab ? tab.dbId : (getActiveTab() ? getActiveTab().dbId : '');
         // Only show modal if this is the active tab; otherwise defer until user switches
         if (tab && tab.uiId === activeTabId) {
-            showConfirmWriteModal(confirmData.tool, confirmData.path, wcSessionId);
+            showConfirmWriteModal(confirmData.tool, confirmData.path, wcSessionId, confirmData.is_plugin);
         } else if (tab) {
             // Background tab — store confirm request and show indicator
-            tab.pendingConfirm = { tool: confirmData.tool, path: confirmData.path, sessionId: wcSessionId };
+            tab.pendingConfirm = { tool: confirmData.tool, path: confirmData.path, sessionId: wcSessionId, isPlugin: confirmData.is_plugin };
             tab.isWaiting = true;
             updateTabBar();
         }
@@ -1379,6 +1500,12 @@ function finishStream() {
     if (tab) {
         tab.isStreaming = false;
         tab.isWaiting = false;
+        // ★ 结块修复：用户手动停止后，必须同步清空 tab 持有的思考/回复/命令块引用。
+        // 否则 handleEventForTab 下次会从 tab.currentThinkingEl 恢复旧引用，
+        // 导致新消息的思考内容追加到旧的思考块里。
+        tab.currentThinkingEl = null;
+        tab.currentReplyEl = null;
+        tab.currentCmdEl = null;
         // Clear this tab's polling timer if still running
         if (tab.pollingTimer) {
             clearInterval(tab.pollingTimer);
@@ -1425,6 +1552,24 @@ var ALLOWED_EXTS = [
     'pdf', 'docx', 'xlsx'
 ];
 
+// 视觉文件扩展名（图片 / 视频）—— 仅在设置中开启「视觉 API」后允许上传，
+// 交由开发者接入的多模态视觉模型处理。
+var VISUAL_IMAGE_EXTS = [
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'tiff', 'tif'
+];
+var VISUAL_VIDEO_EXTS = [
+    'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', 'wmv', 'm4v', 'mpg', 'mpeg'
+];
+var VISUAL_EXTS = VISUAL_IMAGE_EXTS.concat(VISUAL_VIDEO_EXTS);
+
+function isVisualExt(ext) {
+    return VISUAL_EXTS.indexOf(ext) !== -1;
+}
+
+function visionEnabled() {
+    return !!(typeof config !== 'undefined' && config && config.vision_enabled);
+}
+
 function formatSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -1470,7 +1615,13 @@ async function handleFiles(fileList) {
             continue;
         }
         var ext = file.name.split('.').pop().toLowerCase();
-        if (ALLOWED_EXTS.indexOf(ext) === -1) {
+        if (isVisualExt(ext)) {
+            // 视觉文件（图片/视频）：需开启「视觉 API」才接收
+            if (!visionEnabled()) {
+                showToast(t('vision_required_hint') + ': ' + file.name + ' (.' + ext + ')');
+                continue;
+            }
+        } else if (ALLOWED_EXTS.indexOf(ext) === -1) {
             showToast(t('unsupported_format') + ': ' + file.name + ' (.' + ext + ')');
             continue;
         }
@@ -1750,6 +1901,9 @@ askUserReplyInput.addEventListener('keydown', function(e) {
 
 confirmWriteConfirmBtn.addEventListener('click', handleConfirmWriteConfirm);
 confirmWriteCancelBtn.addEventListener('click', handleConfirmWriteCancel);
+if (confirmWriteNoMoreBtn) {
+    confirmWriteNoMoreBtn.addEventListener('click', handleConfirmWriteNoMore);
+}
 
 document.addEventListener('keydown', function(e) {
     if (confirmWriteModal.style.display === 'block') {

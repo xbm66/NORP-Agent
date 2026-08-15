@@ -166,6 +166,28 @@ ALWAYS_BLOCKED: Set[str] = {
     "ctypes", "cffi",
 }
 
+# ★ P0-3 修复：动态调用绕过检测用的「危险函数名」集合。
+#   用于识别 getattr(os, "system")、obj.__getattribute__("eval") 等
+#   绕过静态字面量匹配的间接调用。
+DANGEROUS_FUNC_NAMES: Set[str] = {
+    "system", "popen", "run", "Popen", "call", "check_output", "check_call",
+    "getoutput", "getstatusoutput",
+    "eval", "exec", "compile", "execfile",
+    "__import__", "import_module",
+    "remove", "unlink", "rmtree", "rmdir",
+    "chmod", "chown",
+    "kill", "terminate", "_exit", "exit",
+    "setprofile", "settrace",
+    "loads", "unsafe_load", "load",
+    "ShellExecute", "ShellExecuteW", "ShellExecuteA",
+    "WriteProcessMemory", "VirtualAllocEx", "CreateRemoteThread",
+}
+
+# 动态访问可能借道的「反射 / 内省」入口（用于检测间接绕过）
+REFLECTION_ENTRYPOINTS: Set[str] = {
+    "getattr", "__getattribute__", "__dict__", "globals", "locals", "vars",
+}
+
 
 # ── Import blocker (sys.meta_path finder) ─────────────────────────
 
@@ -318,9 +340,14 @@ class PluginSecurity:
 
     # ── Audit entry point ───────────────────────────────────────
 
-    def audit_file(self, file_path: str) -> Tuple[List[SecurityIssue], bool]:
+    def audit_file(self, file_path: str, audit_level: Optional[str] = None) -> Tuple[List[SecurityIssue], bool]:
         """
         Read and audit a plugin source file.
+
+        Parameters
+        ----------
+        audit_level : str | None
+            覆盖实例级 audit_level（用于签名信任分级：受信任插件放宽审计）。
 
         Returns
         -------
@@ -336,9 +363,9 @@ class PluginSecurity:
                 f"Cannot read source file: {exc}", "io_error"
             )], False
 
-        return self.audit_source(source)
+        return self.audit_source(source, audit_level=audit_level)
 
-    def audit_source(self, source: str) -> Tuple[List[SecurityIssue], bool]:
+    def audit_source(self, source: str, audit_level: Optional[str] = None) -> Tuple[List[SecurityIssue], bool]:
         """Parse *source* and walk the AST looking for dangerous patterns."""
         issues: List[SecurityIssue] = []
 
@@ -354,11 +381,12 @@ class PluginSecurity:
         self._walk(tree, issues)
 
         # ── Decision ──
-        if self.audit_level == "off":
+        level = audit_level if audit_level is not None else self.audit_level
+        if level == "off":
             return issues, True
 
         has_critical = any(i.severity == Severity.CRITICAL for i in issues)
-        if self.audit_level == "block" and has_critical:
+        if level == "block" and has_critical:
             return issues, False
 
         return issues, True
@@ -429,9 +457,102 @@ class PluginSecurity:
 
             elif isinstance(node, ast.Call):
                 self._check_call(node, issues)
+                self._check_dynamic_call(node, issues)
 
             elif isinstance(node, ast.Attribute):
                 self._check_attribute(node, issues)
+
+            elif isinstance(node, ast.Subscript):
+                self._check_dynamic_subscript(node, issues)
+
+    def _check_dynamic_call(self, node: ast.Call, issues: List[SecurityIssue]):
+        """★ P0-3：检测 getattr / __getattribute__ / 反射 等动态调用绕过。
+
+        例如：
+          getattr(os, "system")("...")          → 动态调用 os.system
+          os.__getattribute__("popen")("...")   → 动态调用 os.popen
+          builtins.__dict__["eval"]("...")      → 通过 __dict__ 间接访问
+        """
+        func = node.func
+        callee = None
+        args = list(node.args)
+
+        # getattr(obj, name) / obj.__getattribute__(name)
+        if isinstance(func, ast.Name) and func.id in ("getattr",):
+            callee = "getattr"
+            obj_arg, name_arg = 0, 1
+        elif isinstance(func, ast.Attribute) and func.attr == "__getattribute__":
+            callee = "__getattribute__"
+            obj_arg, name_arg = None, 0
+            if func.value is not None:
+                args.insert(0, func.value)
+        else:
+            return
+
+        if not args:
+            return
+
+        # 取 name 字符串常量
+        name_str = None
+        if len(args) > name_arg:
+            name_node = args[name_arg]
+            if isinstance(name_node, ast.Constant) and isinstance(name_node.value, str):
+                name_str = name_node.value
+
+        # 取对象名
+        obj_str = None
+        if obj_arg is not None and len(args) > obj_arg:
+            obj_str = self._resolve_call_name(args[obj_arg])
+
+        flagged = False
+        if name_str and name_str in DANGEROUS_FUNC_NAMES:
+            flagged = True
+        elif obj_str:
+            base = obj_str.split(".")[0]
+            if base in ("os", "subprocess", "builtins", "sys", "ctypes", "cffi", "shutil"):
+                flagged = True
+
+        if flagged:
+            desc = f"{obj_str or '?'}.{name_str or '?'}" if obj_str else f"getattr(..., {name_str!r})"
+            issues.append(SecurityIssue(
+                Severity.CRITICAL, node.lineno, desc,
+                "动态调用绕过静态审计（getattr/__getattribute__ 间接访问危险能力）",
+                "dynamic_bypass",
+            ))
+
+    def _check_dynamic_subscript(self, node: ast.Subscript, issues: List[SecurityIssue]):
+        """★ P0-3：检测 __dict__ / globals() / locals() / vars() 下标间接访问。
+
+        例如：
+          os.__dict__["system"]
+          globals()["os"].system
+          vars()["subprocess"].run
+        """
+        key_str = None
+        if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+            key_str = node.slice.value
+
+        base = self._resolve_call_name(node.value) if not isinstance(node.value, ast.Call) else None
+        if base is None and isinstance(node.value, ast.Call):
+            base = self._resolve_call_name(node.value.func)
+
+        # 检测 __dict__ 下标访问危险名
+        if base and base.endswith("__dict__") and key_str and key_str in DANGEROUS_FUNC_NAMES:
+            issues.append(SecurityIssue(
+                Severity.CRITICAL, node.lineno, f"{base}[{key_str!r}]",
+                "通过 __dict__ 下标间接访问危险能力，绕过静态审计",
+                "dynamic_bypass",
+            ))
+            return
+
+        # 检测 globals()/locals()/vars() 下标
+        if base in ("globals", "locals", "vars"):
+            if key_str and key_str in ("os", "subprocess", "builtins", "sys", "ctypes", "importlib"):
+                issues.append(SecurityIssue(
+                    Severity.CRITICAL, node.lineno, f"{base}()[{key_str!r}]",
+                    "通过内省字典间接访问危险模块，绕过静态审计",
+                    "dynamic_bypass",
+                ))
 
     def _check_import(self, name: str, lineno: int,
                       issues: List[SecurityIssue]):

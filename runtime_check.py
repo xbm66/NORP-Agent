@@ -658,21 +658,37 @@ class RuntimeChecker:
         # ── 官方插件文件 ──
         official_plugins_dir = os.path.join(app_dir, "official_plugins")
         expected_plugins = [
-            "clipboard_manager.py", "code_reviewer.py", "context_retriever.py",
-            "dev_utilities.py", "doc_reader.py", "file_searcher.py",
-            "file_surgeon.py", "note_manager.py", "office_writer.py",
+            "clipboard_manager.py", "code_reviewer.py",
+            "dev_utilities.py", "doc_reader.py",
+            "note_manager.py", "office_writer.py",
             "stress_tester.py", "time_tracker.py",
         ]
         op_missing = []
+        op_not_bundled = False  # 打包发行版按设计不内置官方插件
         if not os.path.isdir(official_plugins_dir):
-            op_missing = expected_plugins  # 整个目录不存在
+            if getattr(sys, 'frozen', False):
+                # 打包发行版不随 exe 分发任何插件（用户可通过插件面板自行添加目录）
+                op_not_bundled = True
+            else:
+                op_missing = expected_plugins  # 整个目录不存在
         else:
             for fname in expected_plugins:
                 fpath = os.path.join(official_plugins_dir, fname)
                 if not os.path.isfile(fpath):
                     op_missing.append(fname)
 
-        if op_missing:
+        if op_not_bundled:
+            results.append(CheckItem(
+                category="plugin_runtime",
+                name="官方插件文件",
+                severity=Severity.INFO,
+                passed=True,
+                message="发行版按设计不内置官方插件",
+                detail="插件系统完整可用。如需官方插件，可在「插件控制面板」中添加"
+                       " official_plugins 目录（须与发行版配套提供）。",
+                suggestion=""
+            ))
+        elif op_missing:
             results.append(CheckItem(
                 category="plugin_runtime",
                 name="官方插件文件",

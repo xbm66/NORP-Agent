@@ -62,6 +62,29 @@ def plugin_has_tool(plugin_manager, tool_name: str) -> bool:
         return False
 
 
+def robust_decode(data: bytes) -> str:
+    """按编码优先级严格解码子进程输出字节。
+
+    Windows 控制台程序（cmd 内建命令、Python 子进程等）默认以本地
+    代码页（中文系统为 GBK/cp936）向管道输出原始字节。若一律按 utf-8
+    解码，GBK 中文会变成乱码（U+FFFD 替换符）——这是「工具输出乱码」
+    的常见根因，与 LLM 无关（LLM 只是把已经乱码的文本原样复述出来）。
+
+    本函数按 utf-8 → gbk → cp936 → cp1252 → latin-1 依次尝试严格解码：
+    - GBK 字节在 utf-8 严格模式下几乎必然抛 UnicodeDecodeError → 落入 gbk；
+    - 纯 ASCII / 合法 UTF-8 → 第一轮即成功，零开销；
+    - latin-1 永不失败，作为最后兜底（单字节映射，绝不抛异常）。
+    """
+    if not data:
+        return ""
+    for enc in ("utf-8", "gbk", "cp936", "cp1252", "latin-1"):
+        try:
+            return data.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
 def build_system_prompt(project_root: str, enable_web_search: bool,
                         has_context_retriever: bool = True,
                         has_file_searcher: bool = True,
@@ -133,21 +156,21 @@ def build_system_prompt(project_root: str, enable_web_search: bool,
         )
         if has_file_searcher:
             prompt += (
-                "- 严禁对超过 100KB 的文件使用 read_file 全量读取！\n"
-                "- 先用 search_large_file 流式检索定位目标行号\n"
-                "- 再用 read_file(start_line, end_line) 按行范围精确读取需要的片段\n"
-                "- 多文件检索时先用 index_workspace 建索引，再用 search_files 毫秒级搜索\n"
-                "- 不确定文件大小时，先用 list_dir 查看文件大小再决定策略\n"
+                "- ⛔ 严禁对超过 100KB 的文件使用 read_file 全量读取！\n"
+                "- ✅ 先用 search_large_file 流式检索定位目标行号\n"
+                "- ✅ 再用 read_file(start_line, end_line) 按行范围精确读取需要的片段\n"
+                "- ✅ 多文件检索时先用 index_workspace 建索引，再用 search_files 毫秒级搜索\n"
+                "- ✅ 不确定文件大小时，先用 list_dir 查看文件大小再决定策略\n"
             )
         if has_file_surgeon:
             prompt += (
-                "- 严禁用 read_file 全量读取后 write_file 全量写入！\n"
-                "- 修改文件时优先用 surgical_scan 定位目标行\n"
-                "- 然后用 surgical_replace(line_number=...) 精确替换单行\n"
-                "- 手术前先用 dry_run=true 预览，确认无误后再执行\n"
+                "- ⛔ 严禁用 read_file 全量读取后 write_file 全量写入！\n"
+                "- ✅ 修改文件时优先用 surgical_scan 定位目标行\n"
+                "- ✅ 然后用 surgical_replace(line_number=...) 精确替换单行\n"
+                "- ✅ 手术前先用 dry_run=true 预览，确认无误后再执行\n"
             )
         prompt += (
-            "- 核心原则：只把需要看的内容加载到上下文，不要加载整个文件。\n"
+            "- 💸 核心原则：只把需要看的内容加载到上下文，不要加载整个文件。\n"
         )
 
     prompt += (
@@ -185,13 +208,13 @@ def build_system_prompt(project_root: str, enable_web_search: bool,
             "\n[超大文件检索工具 — 优先使用，避免全量读取]\n"
             "search_large_file(path, query, regex?, case_sensitive?, line_context?, max_matches?, encoding?): "
             "对单个超大文件（最高 1GB+）流式精确检索，零索引、内存恒定。返回精确行号和上下文。\n"
-            " 使用时机：查看日志/数据/导出文件等 100KB+ 文件时，必须用此工具替代 read_file 全量读取。\n"
+            "  ⚠️ 使用时机：查看日志/数据/导出文件等 100KB+ 文件时，必须用此工具替代 read_file 全量读取。\n"
             "search_files(query, path?, file_pattern?, case_sensitive?, exact_phrase?, top_k?, max_lines_per_file?, line_context?): "
             "在已索引的工作区文件中毫秒级精确检索，返回文件路径+行号+上下文。\n"
-            " 使用时机：多文件代码库中搜索内容时，比 search_in_files 快 100 倍且自动定位行号。\n"
+            "  ⚠️ 使用时机：多文件代码库中搜索内容时，比 search_in_files 快 100 倍且自动定位行号。\n"
             "index_workspace(directory?, include_patterns?, exclude_dirs?, max_file_mb?, force?): "
             "扫描并索引工作区文件（增量更新），后续可用 search_files 秒级检索。\n"
-            " 使用时机：首次使用 search_files 前必须先建索引（只需一次，后续自动增量）。\n"
+            "  ⚠️ 使用时机：首次使用 search_files 前必须先建索引（只需一次，后续自动增量）。\n"
             "find_files(name_pattern, path?, top_k?): 按文件名/glob 模糊检索，如 find_files('*config*')。\n"
             "workspace_index_status(): 查看索引统计（文件数、字符数、状态分布）。\n"
             "clear_workspace_index(path?): 清理索引（按文件/目录或全部清空）。\n"
@@ -201,18 +224,18 @@ def build_system_prompt(project_root: str, enable_web_search: bool,
             "\n[分子手术刀工具 — 精确修改超大文件中的某一行]\n"
             "surgical_scan(file_path, pattern, use_regex?, line_start?, line_end?, context_lines?, max_matches?, encoding?): "
             "手术前扫描：在超大文件中搜索匹配行，返回行号+上下文预览。先定位再下刀。\n"
-            "使用时机：需要修改某个大文件中的特定行时，先用它找到目标行号。\n"
+            "  ⚠️ 使用时机：需要修改某个大文件中的特定行时，先用它找到目标行号。\n"
             "surgical_replace(file_path, line_number?, old_content?, new_content?, mode?, use_regex?, count?, dry_run?, context_lines?, backup?, encoding?): "
             "分子手术刀：按行号/内容精确替换/插入/删除超大文件中的行。流式读写，1GB 文件内存 < 50MB。\n"
-            "使用时机：修改文件中的特定行时优先使用（而不是 read_file 全量 + write_file 全量）。\n"
-            "安全规则：正式操作前必须先 dry_run=true 预览，确认目标行正确后再 dry_run=false 执行。\n"
+            "  ⚠️ 使用时机：修改文件中的特定行时优先使用（而不是 read_file 全量 + write_file 全量）。\n"
+            "  ⚠️ 安全规则：正式操作前必须先 dry_run=true 预览，确认目标行正确后再 dry_run=false 执行。\n"
         )
     if has_context_retriever:
         prompt += (
             "\n[上下文检索工具]\n"
             "search_context(query, top_k?, min_score?, source_filter?, expand_context?): "
             "在已索引的上下文库中精确检索早期对话、历史工具输出和长文档内容（BM25 全文检索）。\n"
-            "使用时机：用户问题涉及早期会话内容、或当前上下文中缺少所需信息时，"
+            "  ⚠️ 使用时机：用户问题涉及早期会话内容、或当前上下文中缺少所需信息时，"
             "必须先调用 search_context 检索再回答，禁止凭空猜测。\n"
             "index_context(content?, source?, title?, chunk_size?, chunk_overlap?): "
             "将长文本/外部文档加入检索索引，供后续精确检索。\n"
@@ -235,13 +258,14 @@ def build_system_prompt(project_root: str, enable_web_search: bool,
             for tname in sorted(_other_tools):
                 prompt += f"- {tname}: 插件扩展工具，参数详见工具 schema。\n"
             prompt += (
-                "使用时机：上述工具已注册到工具列表，模型可在适当场景直接调用。\n"
+                "  ⚠️ 使用时机：上述工具已注册到工具列表，模型可在适当场景直接调用。\n"
             )
     prompt += (
         "\n[输出规范]\n"
         "- 调用工具时系统自动处理格式，你只需正常推理和决策\n"
         "- 任务完成后输出简洁的自然语言总结，无需列出每一步细节\n"
         "- 遇到阻塞性问题时主动调用 ask_user，不要猜测用户意图\n"
+        "- 代码格式使用 UTF-8 编码，代码当中不允许出现 Emoji，防止编码错误\n"
     )
     prompt += (
         "\n[历史消息处理]\n"
@@ -402,48 +426,23 @@ def build_full_messages(user_message: str, project_root: str,
 
 
 def build_tools_openai(plugin_manager, enable_web_search: bool) -> list:
-    """构建 OpenAI Chat Completions 格式的工具列表。
-
-    按工具名去重：内置工具与插件工具、以及不同插件之间的同名工具，
-    只保留第一次出现的定义，防止发送给 API 的工具列表出现重名。
-    """
-    tools = []
-    seen = set()
-    for t in BUILTIN_TOOLS:
-        name = t["function"]["name"]
-        if name in seen:
-            continue
-        seen.add(name)
-        tools.append(t)
+    """构建 OpenAI Chat Completions 格式的工具列表。"""
+    tools = list(BUILTIN_TOOLS)
     if plugin_manager:
-        for t in plugin_manager.get_tools():
-            name = t["function"]["name"]
-            if name in seen:
-                continue
-            seen.add(name)
-            tools.append(t)
+        plugin_tools = plugin_manager.get_tools()
+        tools.extend(plugin_tools)
     if not enable_web_search:
         tools = [t for t in tools if t["function"]["name"] != "web_search"]
     return tools
 
 
 def build_tools_anthropic(plugin_manager, enable_web_search: bool) -> list:
-    """构建 Anthropic 格式的工具列表。
-
-    按工具名去重（关键修复）：Anthropic / DeepSeek-Anthropic 兼容端点
-    对重名工具严格校验，返回 400 'Tool names must be unique'。
-    这里按名字去重：原生 web_search → 内置工具 → 插件工具，
-    后出现的重名工具一律跳过。
-    """
+    """构建 Anthropic 格式的工具列表。"""
     tools = [{"type": "web_search_20250305", "name": "web_search"}]
-    seen = {"web_search"}
     for t in BUILTIN_TOOLS:
         name = t["function"]["name"]
         if name == "web_search":
             continue
-        if name in seen:
-            continue
-        seen.add(name)
         func = t["function"]
         tools.append({
             "name": name,
@@ -453,12 +452,8 @@ def build_tools_anthropic(plugin_manager, enable_web_search: bool) -> list:
     if plugin_manager:
         for t in plugin_manager.get_tools():
             func = t["function"]
-            name = func.get("name", "")
-            if not name or name in seen:
-                continue
-            seen.add(name)
             tools.append({
-                "name": name,
+                "name": func["name"],
                 "description": func.get("description", ""),
                 "input_schema": func.get("parameters", {"type": "object", "properties": {}})
             })

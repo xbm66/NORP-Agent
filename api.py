@@ -10,7 +10,7 @@ import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 from config import ConfigManager
 from event_queue import EventQueue
@@ -30,15 +30,23 @@ else:
 
 import json
 
+from vision import (
+    is_visual_ext, process_visual, VisionNotConfigured,
+)
+from error_i18n import translate_error
+
 
 
 def extract_text_from_file(file_path: str) -> str:
     ext = Path(file_path).suffix.lower()
+    # 视觉文件（图片/视频）不在这里做文本提取，交由视觉 API 处理。
+    if is_visual_ext(ext.lstrip(".")):
+        raise ValueError(f"Visual file type: {ext}")
     if ext in ['.txt', '.py', '.json', '.csv', '.css', '.html', '.md', '.js',
                '.ts', '.tsx', '.jsx', '.yaml', '.yml', '.toml', '.xml',
                '.sh', '.bat', '.ps1', '.ini', '.cfg', '.log', '.sql', '.rs',
                '.go', '.c', '.cpp', '.h', '.java', '.kt', '.swift', '.rb',
-               '.php', '.lua', '.r', '.m', '.mm','jbeam']:
+               '.php', '.lua', '.r', '.m', '.mm', '.jbeam']:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             return f.read()
     elif ext == '.pdf':
@@ -374,10 +382,12 @@ class AgentAPI:
             max_steps=cfg.get("max_steps", 128),
             enable_web_search=cfg.get("enable_web_search", False),
             confirm_write_delete=cfg.get("confirm_write_delete", True),
+            approval_config=cfg,
             temperature=cfg.get("temperature", 1.0),
             think_level=cfg.get("think_level", "高"),
             max_tokens=cfg.get("max_tokens", 32767),
             task_timeout=cfg.get("task_timeout", 0),
+            api_request_timeout=cfg.get("api_request_timeout", 180),
             plugin_manager=self.plugin_manager,
             use_responses_api=cfg.get("use_responses_api", False),
             allow_full_read_large_files=cfg.get("allow_full_read_large_files", False),
@@ -408,10 +418,9 @@ class AgentAPI:
                                      f"matches={matches}\n")
                     except Exception:
                         pass
-                    return ("error:Jailbreak attempt detected and blocked. "
-                            "Your message contains patterns that may attempt to bypass safety constraints. "
-                            "If you believe this is a false positive, you can disable the jailbreak guard "
-                            "in Settings (jailbreak_guard_enabled = false).")
+                    return ("error:检测到越狱/提示词注入攻击，消息已被拦截。"
+                            "您的内容包含试图绕过安全约束的模式。"
+                            "如为误报，可在设置中关闭越狱防护（jailbreak_guard_enabled = false）。")
                 else:
                     # warn 模式：仅记录日志，放行
                     print(f"[JailbreakGuard] WARNING: {reason}")
@@ -435,11 +444,11 @@ class AgentAPI:
                 session._zombie = False
                 session._stopped = False
             else:
-                return "error:Task already running"
+                return "error:" + translate_error("Task already running")
         try:
             self._create_loop(session)
         except RuntimeError as e:
-            return f"error:{str(e)}"
+            return "error:" + translate_error(e)
 
         session.current_messages.append({"role": "user", "content": text})
 
@@ -479,9 +488,17 @@ class AgentAPI:
                     # 任务自然终止（超时/停止/步数上限），标记 _stopped
                     # 确保下次 send_message 时僵尸检测能正确识别
                     session._stopped = True
-            except Exception:
+            except Exception as ex:
                 err = traceback.format_exc()
-                session.event_queue.put(f"E:{err}")
+                # 完整堆栈记录到日志（供调试），前端只显示友好提示
+                try:
+                    log_path = os.path.join(self.app_dir, "agent_error.log")
+                    with open(log_path, "a", encoding="utf-8") as lf:
+                        from datetime import datetime as _dt
+                        lf.write(f"\n[{_dt.now().isoformat()}] session={session_id}\n{err}\n")
+                except Exception:
+                    pass
+                session.event_queue.put(f"E:{translate_error(ex)}")
                 session.event_queue.signal_finish()
                 session._stopped = True
             finally:
@@ -556,6 +573,12 @@ class AgentAPI:
         return self.config_manager.load()
 
     def save_config(self, config: dict) -> str:
+        # ★ 兼容旧键 confirm_write_delete（向导 / 旧前端写入）：
+        #   同步到原生工具确认配置，保证设置面板与向导语义一致。
+        if "confirm_write_delete" in config:
+            config.setdefault("native_confirm_enabled", config["confirm_write_delete"])
+            config.setdefault("native_confirm_write", config["confirm_write_delete"])
+            config.setdefault("native_confirm_delete", config["confirm_write_delete"])
         self.config_manager.save(config)
         return "ok"
 
@@ -774,29 +797,73 @@ class AgentAPI:
 
     def upload_files(self, files_data: list) -> list:
         result = []
+        cfg = self.config_manager.load()
+        vision_enabled = cfg.get("vision_enabled", False)
         for f in files_data:
             try:
                 raw = base64.b64decode(f["data"])
+                ext = (f.get("type") or "").lower()
+                name = f.get("name", "")
+
+                # ── 视觉文件（图片/视频）：交给视觉 API 处理 ──
+                if is_visual_ext(ext):
+                    if not vision_enabled:
+                        result.append({
+                            "name": name,
+                            "size": f["size"],
+                            "type": ext,
+                            "error": translate_error(
+                                "未配置视觉处理能力。请在设置中开启「视觉 API」并配置服务地址。"
+                            ),
+                        })
+                        continue
+                    try:
+                        description = process_visual(raw, ext, cfg)
+                        result.append({
+                            "name": name,
+                            "size": f["size"],
+                            "type": ext,
+                            "content": f"[视觉描述] {description}",
+                        })
+                    except VisionNotConfigured as ve:
+                        result.append({
+                            "name": name,
+                            "size": f["size"],
+                            "type": ext,
+                            "error": translate_error(ve),
+                        })
+                    except Exception as ve:
+                        result.append({
+                            "name": name,
+                            "size": f["size"],
+                            "type": ext,
+                            "error": translate_error(ve),
+                        })
+                    continue
+
+                # ── 文本 / 文档文件：走文本提取 ──
                 temp_dir = Path(self.app_dir) / "temp"
                 temp_dir.mkdir(exist_ok=True)
-                temp_path = temp_dir / f["name"]
+                temp_path = temp_dir / name
                 with open(temp_path, "wb") as out:
                     out.write(raw)
-                text = extract_text_from_file(str(temp_path))
                 try:
-                    os.remove(temp_path)
-                except Exception:
-                    pass
+                    text = extract_text_from_file(str(temp_path))
+                finally:
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
                 result.append({
-                    "name": f["name"],
+                    "name": name,
                     "size": f["size"],
-                    "type": f.get("type", ""),
+                    "type": ext,
                     "content": text
                 })
             except Exception as e:
                 result.append({
-                    "name": f["name"],
-                    "error": str(e)
+                    "name": f.get("name", ""),
+                    "error": translate_error(e)
                 })
         return result
 
@@ -914,24 +981,61 @@ class AgentAPI:
     def get_plugin_security_config(self) -> dict:
         cfg = self.config_manager.load()
         return {
-            "audit": cfg.get("plugin_security_audit", "warn"),
-            "import_restrict": cfg.get("plugin_security_import_restrict", "off"),
-            "require_permissions": cfg.get("plugin_security_require_permissions", False),
+            # ★ 插件总开关（已从设置面板迁移至插件控制面板）
+            "plugins_enabled": cfg.get("plugins_enabled", True),
+            "audit": cfg.get("plugin_security_audit", "block"),
+            "import_restrict": cfg.get("plugin_security_import_restrict", "strict"),
+            "require_permissions": cfg.get("plugin_security_require_permissions", True),
             "resource_limit": cfg.get("plugin_security_resource_limit", False),
+            # ★ P0-1 进程隔离
+            "isolation": cfg.get("plugin_isolation", "process"),
+            # ★ P0-5 签名校验
+            "signature_verify": cfg.get("plugin_signature_verify", True),
+            "trusted_keys": cfg.get("plugin_trusted_keys", []),
+            # ★ P0-4 网络策略
+            "network_policy": cfg.get("plugin_network_policy", "deny"),
+            "network_url_allowlist": cfg.get("plugin_network_url_allowlist", []),
+            "network_domain_allowlist": cfg.get("plugin_network_domain_allowlist", []),
+            # ★ P0-8 插件工具调用审批（插件控制面板）：仅作用于插件提供的工具；
+            #   原生内置工具的确认在「设置 → 原生工具确认」中配置。
+            "approval_enabled": cfg.get("approval_enabled", True),
         }
 
-    def set_plugin_security_config(self, audit: str = "warn",
-                                   import_restrict: str = "off",
-                                   require_permissions: bool = False,
-                                   resource_limit: bool = False) -> str:
+    def set_plugin_security_config(self, audit: str = "block",
+                                   import_restrict: str = "strict",
+                                   require_permissions: bool = True,
+                                   resource_limit: bool = False,
+                                   isolation: str = "process",
+                                   signature_verify: bool = True,
+                                   trusted_keys: Optional[List[str]] = None,
+                                   network_policy: str = "deny",
+                                   network_url_allowlist: Optional[List[str]] = None,
+                                   network_domain_allowlist: Optional[List[str]] = None,
+                                   approval_enabled: bool = True,
+                                   plugins_enabled: bool = True) -> str:
         cfg = self.config_manager.load()
+        cfg["plugins_enabled"] = plugins_enabled
         cfg["plugin_security_audit"] = audit
         cfg["plugin_security_import_restrict"] = import_restrict
         cfg["plugin_security_require_permissions"] = require_permissions
         cfg["plugin_security_resource_limit"] = resource_limit
+        cfg["plugin_isolation"] = isolation
+        cfg["plugin_signature_verify"] = signature_verify
+        if trusted_keys is not None:
+            cfg["plugin_trusted_keys"] = trusted_keys
+        cfg["plugin_network_policy"] = network_policy
+        if network_url_allowlist is not None:
+            cfg["plugin_network_url_allowlist"] = network_url_allowlist
+        if network_domain_allowlist is not None:
+            cfg["plugin_network_domain_allowlist"] = network_domain_allowlist
+        cfg["approval_enabled"] = approval_enabled
         self.config_manager.save(cfg)
         self.plugin_manager.update_security_config(cfg)
-        self.plugin_manager.set_plugin_dirs(self._resolve_plugin_dirs(cfg.get("plugin_dirs", [])))
+        # ★ 插件总开关：启用则加载配置目录，禁用则清空所有插件
+        if plugins_enabled:
+            self.plugin_manager.set_plugin_dirs(self._resolve_plugin_dirs(cfg.get("plugin_dirs", [])))
+        else:
+            self.plugin_manager.set_plugin_dirs([])
         return "ok"
 
     # ═══════════════════════════════════════════════════════════════
@@ -1036,3 +1140,39 @@ class AgentAPI:
             source_dir = os.path.dirname(os.path.abspath(__file__))
             report = run_startup_check(source_dir)
         return report.to_dict()
+
+    # ═══════════════════════════════════════════════════════════════
+    #  调试面板 API
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_debug_data(self) -> dict:
+        """获取 Agent 调试数据（供前端「调试」面板展示）。
+
+        返回最近一次任务的完整调试信息：
+        - react_steps: ReAct 循环时间线（思考-行动-观察）
+        - tool_calls: 工具调用详情（入参/出参/耗时/沙箱路径映射）
+        - security_events: NORP 安全拦截日志
+        - hook_events: 插件钩子触发记录（L1-L4）
+        - snapshot: 性能与状态快照（token/沙箱池/文件IO/事件队列）
+        """
+        from debug_logger import get_debug_logger
+        dl = get_debug_logger(self.app_dir)
+        return dl.get_debug_data()
+
+    def open_debug_log_dir(self) -> str:
+        """在系统文件管理器中打开调试日志目录（app_dir）。"""
+        try:
+            import platform
+            import subprocess
+            d = self.app_dir or os.getcwd()
+            if not os.path.isdir(d):
+                os.makedirs(d, exist_ok=True)
+            if platform.system() == "Windows":
+                os.startfile(d)
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", d])
+            else:
+                subprocess.Popen(["xdg-open", d])
+            return "ok"
+        except Exception as e:
+            return f"error:{e}"

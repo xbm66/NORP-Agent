@@ -12,3 +12,12 @@ from plugin_system.security import (
     PluginImportBlocker, StrictImportBlocker, ResourceLimiter,
     _loading_plugin,
 )
+from plugin_system.signature import (
+    SignatureVerifier, SignatureResult, SignatureStatus,
+    OFFICIAL_PUBLIC_KEY,
+)
+from plugin_system.network_policy import (
+    NetworkPolicy, NetworkDecision,
+    POLICY_DENY, POLICY_AUDITED_PUBLIC, POLICY_PUBLIC_ONLY, POLICY_ALLOW_ALL,
+)
+from plugin_system.approval import ApprovalPolicy, ApprovalLevel

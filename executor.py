@@ -13,10 +13,12 @@ from pathlib import Path
 from typing import Optional
 
 from norp_safe import NorpSafe, get_norp_safe, ThreatLevel
+from vision import is_visual_ext, describe_visual_file, VisionNotConfigured
 from workspace_index import WorkspaceIndex, get_workspace_index, search_large_file_stream, scan_and_index, _fmt_size as _wi_fmt_size
 from file_surgery import perform_surgery, perform_scan
 from web_fetcher_native import handle_web_fetch, handle_web_extract_links
 from context_index import FTS5Retriever, get_context_index, chunk_text
+from agent_shared import robust_decode
 
 
 class DockerSandbox:
@@ -106,6 +108,7 @@ class ToolExecutor:
                  task_id: str = ""):
         self.project_root = os.path.abspath(project_root)
         self.sandbox = sandbox
+        self.app_dir = app_dir
         self.allow_full_read_large_files = allow_full_read_large_files
         self.task_id = task_id
         if app_dir:
@@ -180,30 +183,63 @@ class ToolExecutor:
             return f"Tool execution failed: {str(e)}"
 
     def _safe_path(self, path: str) -> str:
-        # ★ 统一转为相对路径：避免 LLM 传入绝对路径导致 os.path.join 忽略 project_root，
-        # 以及 Windows 大小写差异导致的 startswith 失败。
-        if os.path.isabs(path):
-            try:
-                rel = os.path.relpath(path, self.project_root)
-                if not rel.startswith("..") or rel == ".":
-                    path = rel
-            except ValueError:
-                pass  # 跨盘符等无法计算相对路径的情况，保持原路径让后续检查处理
-
-        # NORP 安全系统：路径越界检查
-        result = self.norp_safe.check_path(path, workspace_root=self.project_root, task_id=self.task_id)
+        """验证并规范化路径，确保在工作区范围内（结构化，防前缀误判）。"""
+        # NORP 安全系统：路径越界语义检查
+        result = self.norp_safe.check_path(
+            path, workspace_root=self.project_root, task_id=self.task_id)
         if result.blocked:
-            raise ValueError(f"NORP安全系统拦截: {result.reason}（威胁等级: {result.threat_level.value}）")
+            raise ValueError(
+                f"NORP安全系统拦截: {result.reason}（威胁等级: {result.threat_level.value}）")
 
-        full = os.path.abspath(os.path.join(self.project_root, path))
-        if not full.startswith(self.project_root + os.sep) and full != self.project_root:
-            raise ValueError(f"NORP安全系统拦截: 路径越界 - {path}（工作区={self.project_root}）")
-        return full
+        # 结构化解析：resolve 解析符号链接与 ..，组件级比较避免前缀误判
+        base = Path(self.project_root).resolve()
+        try:
+            expanded = os.path.expandvars(os.path.expanduser(str(path)))
+        except Exception:
+            expanded = str(path)
+
+        if os.path.isabs(expanded):
+            candidate = Path(expanded)
+        else:
+            candidate = base / expanded
+
+        try:
+            resolved = candidate.resolve(strict=False)
+        except Exception:
+            resolved = Path(os.path.abspath(str(candidate)))
+
+        try:
+            resolved.relative_to(base)
+        except ValueError:
+            raise ValueError(
+                f"NORP安全系统拦截: 路径越界 - {path}（工作区={self.project_root}）")
+
+        return str(resolved)
+
+    def _get_vision_config(self) -> dict:
+        """读取视觉相关配置（用于 read_file 视觉分支）。"""
+        if not self.app_dir:
+            return {}
+        try:
+            from config import ConfigManager
+            return ConfigManager(self.app_dir).load()
+        except Exception:
+            return {}
 
     def _read_file(self, args: dict) -> str:
         path = self._safe_path(args["path"])
         start_line = args.get("start_line")
         end_line = args.get("end_line")
+
+        # ── 视觉文件（图片/视频）：读二进制 → 视觉描述 ──
+        ext = os.path.splitext(path)[1].lower().lstrip(".")
+        if is_visual_ext(ext):
+            try:
+                return describe_visual_file(path, self._get_vision_config())
+            except VisionNotConfigured as e:
+                return f"[视觉未配置] {e}"
+            except Exception as e:
+                return f"[视觉处理失败] {e}"
 
         # ── 全量读取大文件开关 ──
         if start_line is None and end_line is None:
@@ -408,11 +444,14 @@ class ToolExecutor:
         return self._exec_local(cmd, timeout)
 
     def _exec_local(self, cmd: str, timeout: int) -> str:
+        # ★ 编码修复：Windows 控制台程序默认以本地代码页（GBK）输出，
+        #   text=True 依赖 locale 猜测编码且可能抛 UnicodeDecodeError。
+        #   改为捕获原始字节 + robust_decode 多编码兜底，彻底消除乱码。
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True,
+            cmd, shell=True, capture_output=True,
             timeout=timeout, cwd=self.project_root
         )
-        output = (result.stdout + result.stderr).strip()
+        output = (robust_decode(result.stdout) + robust_decode(result.stderr)).strip()
         if not output:
             output = f"Command exited with code {result.returncode}"
         return output

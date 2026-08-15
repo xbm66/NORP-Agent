@@ -22,6 +22,47 @@ else:
 
 FRONTEND_PATH = os.path.join(_BASE_DIR, "front.html")
 
+# ── 全局未捕获异常兜底：任何阶段（含模块级 import 失败）的崩溃都写入 crash.log ──
+_CRASH_LOG_PATH = os.path.join(APP_DIR, "crash.log")
+
+
+def _append_crash_log(text):
+    """把崩溃信息追加写入 crash.log（写失败则静默，不掩盖原始异常）。"""
+    try:
+        with open(_CRASH_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(text)
+    except Exception:
+        pass
+
+
+def _global_excepthook(exc_type, exc_value, exc_tb):
+    """未捕获异常兜底：写 crash.log（SystemExit 属正常退出路径，不记录）。"""
+    if exc_type is SystemExit:
+        return
+    _append_crash_log("".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+
+
+def _thread_excepthook(args):
+    """后台线程未捕获异常兜底：写 crash.log。"""
+    try:
+        exc_type, exc_value, exc_tb = args.exc_type, args.exc_value, args.exc_traceback
+    except AttributeError:
+        return
+    _append_crash_log("".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+
+
+sys.excepthook = _global_excepthook
+if hasattr(threading, "excepthook"):
+    threading.excepthook = _thread_excepthook
+
+# faulthandler：捕获 C 级崩溃（缺 DLL / 访问冲突等），追加写入 crash.log
+try:
+    import faulthandler
+    _fault_log_f = open(_CRASH_LOG_PATH, "a", encoding="utf-8")
+    faulthandler.enable(_fault_log_f)
+except Exception:
+    pass
+
 # ── 开发模式：前端源文件变更时自动重新构建 ──
 if not getattr(sys, 'frozen', False):
     _front_src_dir = os.path.join(_BASE_DIR, "front_src")
@@ -88,6 +129,169 @@ def load_frontend_html():
         with open(FRONTEND_PATH, "r", encoding="utf-8") as f:
             return f.read()
     return "<h1>Error: front.html not found</h1>"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 单实例 / 重复启动检测
+# ═══════════════════════════════════════════════════════════════
+
+_INSTANCE_LOCK_PATH = os.path.join(APP_DIR, "instance.lock")
+
+
+def _get_current_exe_name():
+    """获取当前进程的可执行文件名（不含路径，小写）。失败返回空串。"""
+    try:
+        buf = ctypes.create_unicode_buffer(260)
+        n = ctypes.windll.kernel32.GetModuleFileNameW(None, buf, 260)
+        if n:
+            return os.path.basename(buf.value).lower()
+    except Exception:
+        pass
+    return ""
+
+
+def _is_pid_alive(pid):
+    """判断指定 PID 的进程是否仍在运行（通过退出码 STILL_ACTIVE 判定）。"""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return code.value == STILL_ACTIVE
+            return False
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return False
+
+
+def _read_instance_lock():
+    """读取 instance.lock，返回 dict 或 None。"""
+    try:
+        if os.path.exists(_INSTANCE_LOCK_PATH):
+            with open(_INSTANCE_LOCK_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and "pid" in data:
+                return data
+    except Exception:
+        pass
+    return None
+
+
+def _write_instance_lock(state="running", data=None):
+    """
+    写入实例锁（原子写入，避免残留半截文件）。
+    state:  "running"   — 实例正常运行（默认）
+            "prompting" — 实例正在显示「重复启动」确认框（占位，阻止后续实例再弹窗）
+    data:   可选，直接写入给定锁内容（用于「取消」时恢复被占位覆盖的旧锁）。
+    """
+    try:
+        if data is None:
+            data = {
+                "pid": os.getpid(),
+                "exe": _get_current_exe_name(),
+                "started_at": __import__("datetime").datetime.now().isoformat(),
+                "state": state,
+            }
+        else:
+            data = dict(data)
+            data["state"] = state
+        tmp = _INSTANCE_LOCK_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, _INSTANCE_LOCK_PATH)
+    except Exception:
+        pass
+
+
+def _clear_instance_lock():
+    """退出时清理：仅当锁记录的 pid 属于本进程时才删除，避免误删其它实例的锁。"""
+    try:
+        data = _read_instance_lock()
+        if data and data.get("pid") == os.getpid():
+            try:
+                os.remove(_INSTANCE_LOCK_PATH)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+# 实例锁状态常量（check_duplicate_launch 返回值）
+_LOCK_NONE = "none"            # 无运行实例 / 陈旧锁 → 正常启动
+_LOCK_RUNNING = "running"      # 已有实例正常运行 → 弹「重复启动」确认框
+_LOCK_PROMPTING = "prompting"  # 已有实例正在显示确认框 → 本实例静默退出
+
+
+def check_duplicate_launch():
+    """
+    检查是否已有另一个 NORP Agent 实例在运行（或正在显示重复启动确认框）。
+    依据 instance.lock 记录的 pid，并做「进程存活 + exe 名一致」双重校验，
+    防止 PID 复用或陈旧锁导致误判。
+    返回值：
+        _LOCK_NONE       无运行实例，可正常启动
+        _LOCK_RUNNING    已有实例在运行，应弹确认框询问用户
+        _LOCK_PROMPTING  已有实例正在显示确认框，本实例应静默退出（避免弹窗叠弹窗）
+    """
+    if os.name != "nt":
+        return _LOCK_NONE
+    try:
+        data = _read_instance_lock()
+        if not data:
+            return _LOCK_NONE
+        pid = data.get("pid")
+        if not pid or pid == os.getpid():
+            return _LOCK_NONE
+
+        # 1. 进程存活校验：已退出则视为陈旧锁，直接清理
+        if not _is_pid_alive(pid):
+            try:
+                os.remove(_INSTANCE_LOCK_PATH)
+            except Exception:
+                pass
+            return _LOCK_NONE
+
+        # 2. exe 名一致性校验：防止该 PID 被无关进程复用后误判
+        lock_exe = (data.get("exe") or "").lower()
+        cur_exe = _get_current_exe_name()
+        if lock_exe and cur_exe and lock_exe != cur_exe:
+            return _LOCK_NONE
+
+        # 3. 已有实例正在弹确认框时，本实例不再弹窗
+        if data.get("state") == "prompting":
+            return _LOCK_PROMPTING
+        return _LOCK_RUNNING
+    except Exception:
+        return _LOCK_NONE
+
+
+def _prompt_duplicate_launch():
+    """
+    弹出重复启动确认框（置顶显示）。返回 True 表示用户选择「确定」（再次启动新实例），
+    False 表示「取消」（退出本次启动）。弹窗失败时不阻断启动（返回 True）。
+    """
+    try:
+        MB_OKCANCEL = 0x00000001
+        MB_ICONQUESTION = 0x00000020
+        MB_TOPMOST = 0x00040000
+        MB_SETFOREGROUND = 0x00010000
+        IDOK = 1
+        ret = ctypes.windll.user32.MessageBoxW(
+            0,
+            "检测到 NORP Agent 已经启动。\n\n"
+            "点击「确定」：再次启动一个新实例（显示主窗口）；\n"
+            "点击「取消」：退出本次启动，不打开任何窗口。",
+            "NORP Agent — 重复启动",
+            MB_OKCANCEL | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND
+        )
+        return ret == IDOK
+    except Exception:
+        return True
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -497,6 +701,9 @@ _API_METHOD_NAMES = [
     # 运行时完整性检测
     'get_runtime_health',
 
+    # 调试面板
+    'get_debug_data', 'open_debug_log_dir',
+
 ]
 
 
@@ -587,6 +794,40 @@ def loading_ready():
 def main():
     global _splash_window, _main_window, _front_html_str
 
+    # ── 插件宿主子进程入口（打包模式专用） ──
+    # PluginHostClient 在 frozen 模式下以「自身 exe + --norp-plugin-host」
+    # 启动插件宿主子进程。此处拦截该参数并直接进入宿主主循环，
+    # 避免启动第二个 GUI 实例（也不会触碰单实例锁）。
+    if "--norp-plugin-host" in sys.argv:
+        from plugin_system.plugin_host import main as _plugin_host_main
+        _plugin_host_main()
+        sys.exit(0)
+
+    # ── 重复启动检测（状态机） ──
+    #   _LOCK_NONE       → 写锁，正常启动
+    #   _LOCK_RUNNING    → 先写占位锁(prompting)再弹确认框：
+    #                       「确定」→ 锁转正(running)，继续启动，显示主窗口
+    #                        「取消」→ 恢复旧锁/清锁，os._exit(0) 立即退出，不进入启动流程
+    #   _LOCK_PROMPTING  → 已有确认框在显示，本实例静默退出（杜绝弹窗叠弹窗）
+    launch_state = check_duplicate_launch()
+    if launch_state == _LOCK_PROMPTING:
+        return  # 已有实例正在弹确认框，本实例静默退出
+    if launch_state == _LOCK_RUNNING:
+        old_lock = _read_instance_lock()  # 备份旧锁，「取消」时恢复
+        _write_instance_lock(state="prompting")  # 占位：阻止后续实例再弹窗
+        if not _prompt_duplicate_launch():
+            # 用户点击「取消」：直接退出进程，不创建任何窗口
+            if old_lock and _is_pid_alive(old_lock.get("pid")):
+                _write_instance_lock(state="running", data=old_lock)  # 旧实例仍在，恢复其锁
+            else:
+                _clear_instance_lock()  # 旧实例已退出，清掉自己的占位锁
+            os._exit(0)
+        # 用户点击「确定」：本实例转正
+        _write_instance_lock(state="running")
+    else:
+        # 记录当前实例（供后续启动检测使用）
+        _write_instance_lock(state="running")
+
     _front_html_str = load_frontend_html()
 
     try:
@@ -675,7 +916,11 @@ def main():
             cleanup_thread.start()
             cleanup_thread.join(timeout=5)
 
+            # 清理实例锁
+            _clear_instance_lock()
+
     except Exception:
+        _clear_instance_lock()
         crash_log = os.path.join(APP_DIR, "crash.log")
         with open(crash_log, "w", encoding="utf-8") as f:
             f.write(traceback.format_exc())
