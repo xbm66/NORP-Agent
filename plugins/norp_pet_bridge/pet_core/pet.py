@@ -139,30 +139,164 @@ def hide_console():
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+NORP_EXE_NAMES = ("norp.agent.exe", "norp_agent.exe")   # 新版点号命名 / 旧版下划线命名
+
+
+def _is_norp_marker_dir(d):
+    """目录是否像一个 NORP 安装目录（含 exe，或 main.py + front.html）。"""
+    try:
+        entries = os.listdir(d)
+    except OSError:
+        return False
+    for name in NORP_EXE_NAMES:
+        if os.path.isfile(os.path.join(d, name)):
+            return True
+    if (os.path.isfile(os.path.join(d, "main.py"))
+            and os.path.isfile(os.path.join(d, "front.html"))):
+        return True
+    return False
+
+
 def _locate_workspace_root():
-    """从当前目录向上找工作区根（含 NORP_Agent.exe 的目录）。"""
+    """从当前目录向上找工作区根目录。
+
+    兼容三种摆放：
+      · 插件内嵌版 plugins/norp_pet_bridge/pet_core/（向上穿过多级目录）
+      · 桌面独立版 desktop_pet/（向上找到含 exe 的工作区根）
+      · 工作区根不含 exe、exe 在版本子目录（20260810/ 等）里的情况
+    """
     d = _HERE
-    for _ in range(6):
-        if os.path.exists(os.path.join(d, "NORP_Agent.exe")):
+    for _ in range(8):
+        if _is_norp_marker_dir(d):
             return d
-        d = os.path.dirname(d)
+        # 该目录的直接子目录里有 NORP 版本目录 → 本目录就是工作区根
+        try:
+            for sub in os.listdir(d):
+                sdir = os.path.join(d, sub)
+                if os.path.isdir(sdir) and _is_norp_marker_dir(sdir):
+                    return d
+        except OSError:
+            pass
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
     return os.path.dirname(_HERE)
 
 
-APP_DIR = _HERE
-ROOT_DIR = _locate_workspace_root()                      # 工作区根目录（exe 所在）
-CONFIG_PATH = os.path.join(APP_DIR, "config.json")
-DEFAULT_EXE = os.path.join(ROOT_DIR, "NORP_Agent.exe")
-# 源码版 NORP Agent 目录（自动探测）
-for _d in ("NORP-Agent-update20260807", "norp-agent", "NORP_Agent_src", "src"):
-    _p = os.path.join(ROOT_DIR, _d, "main.py")
-    if os.path.exists(_p):
-        DEFAULT_SOURCE_DIR = os.path.join(ROOT_DIR, _d)
-        break
-else:
-    DEFAULT_SOURCE_DIR = os.path.join(ROOT_DIR, "NORP-Agent-update20260807")
+def _mtime_of(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
 
-DEFAULT_API_URL = "http://127.0.0.1:17777"   # NORP 本地 API 地址
+
+def _version_label(path):
+    """从路径提取人类可读的版本标签。"""
+    p = (path or "").lower()
+    if "20260810" in p or "main_update" in p:
+        return "20260810 新版"
+    if "20260807" in p or "update20260807" in p:
+        return "20260807 旧版"
+    if p.endswith("norp.agent.exe"):
+        return "新版 EXE"
+    if p.endswith("norp_agent.exe"):
+        return "旧版 EXE"
+    return os.path.basename(os.path.normpath(path)) or "未知版本"
+
+
+def _version_sort_key(path):
+    """版本排序键：目录名里的日期新者优先；无日期时用文件 mtime。"""
+    import re as _re
+    p = (path or "").lower()
+    m = _re.findall(r"20\d{6}", p)
+    if m:
+        return (1, int(max(m)), _mtime_of(path))
+    # 无日期：新版特征（点号 exe 名 / main_update 目录）排在旧版前面
+    if "norp.agent.exe" in p or "main_update" in p:
+        return (0, 20260810, _mtime_of(path))
+    return (0, 0, _mtime_of(path))
+
+
+def _find_norp_installs(root=None):
+    """扫描工作区，返回所有 NORP 安装候选（exe / 源码目录），按版本新旧排序。
+
+    返回 [{"kind": "exe"|"src", "path": ..., "label": ..., "sort_key": ...}, ...]
+    覆盖三种摆放：根目录本身、根下版本子目录（20260810/）、
+    版本子目录里再套一层（20260810/NORP-Agent-main_updatev1.0/）。
+    """
+    root = root or ROOT_DIR
+    out = []
+    seen = set()
+
+    def _add_exe(path):
+        path = os.path.normpath(path)
+        if not os.path.isfile(path) or path.lower() in seen:
+            return
+        # Windows 大小写不敏感：用目录列表还原真实文件名
+        # （探测名是 norp.agent.exe，实际文件可能是 NORP.Agent.exe）
+        d = os.path.dirname(path)
+        base = os.path.basename(path)
+        try:
+            for f in os.listdir(d):
+                if f.lower() == base.lower():
+                    path = os.path.normpath(os.path.join(d, f))
+                    break
+        except OSError:
+            pass
+        seen.add(path.lower())
+        out.append({"kind": "exe", "path": path,
+                    "label": _version_label(path),
+                    "sort_key": _version_sort_key(path)})
+
+    def _add_src(d):
+        d = os.path.normpath(d)
+        if not os.path.isfile(os.path.join(d, "main.py")) or d.lower() in seen:
+            return
+        seen.add(d.lower())
+        out.append({"kind": "src", "path": d,
+                    "label": _version_label(d),
+                    "sort_key": _version_sort_key(d)})
+
+    if _is_norp_marker_dir(root):
+        for nm in NORP_EXE_NAMES:
+            _add_exe(os.path.join(root, nm))
+        _add_src(root)
+    try:
+        subs = [os.path.join(root, s) for s in os.listdir(root)]
+    except OSError:
+        subs = []
+    for sdir in subs:
+        if not os.path.isdir(sdir):
+            continue
+        for nm in NORP_EXE_NAMES:
+            _add_exe(os.path.join(sdir, nm))
+        _add_src(sdir)
+        try:  # 版本目录里可能还套一层
+            for s2 in os.listdir(sdir):
+                s2d = os.path.join(sdir, s2)
+                if not os.path.isdir(s2d):
+                    continue
+                for nm in NORP_EXE_NAMES:
+                    _add_exe(os.path.join(s2d, nm))
+                _add_src(s2d)
+        except OSError:
+            pass
+    out.sort(key=lambda it: it["sort_key"], reverse=True)
+    return out
+
+
+APP_DIR = _HERE
+ROOT_DIR = _locate_workspace_root()                      # 工作区根目录（exe/版本目录所在）
+CONFIG_PATH = os.path.join(APP_DIR, "config.json")
+# 自动探测所有 NORP 安装（新版优先），DEFAULT_EXE / DEFAULT_SOURCE_DIR 取最新
+_INSTALLS = _find_norp_installs(ROOT_DIR)
+DEFAULT_EXE = next((it["path"] for it in _INSTALLS if it["kind"] == "exe"),
+                   os.path.join(ROOT_DIR, "NORP.Agent.exe"))
+DEFAULT_SOURCE_DIR = next((it["path"] for it in _INSTALLS if it["kind"] == "src"),
+                          os.path.join(ROOT_DIR, "NORP-Agent-update20260807"))
+
+DEFAULT_API_URL = "http://127.0.0.1:17777"   # NORP 本地 API 地址（仅旧版 20260807 提供）
 
 TRANSPARENT = "#000000"      # 透明键控色（纯黑）：与 Tk -transparentcolor 严格二值匹配，透明像素统一填此色被抠掉
 ASSETS_DIR = os.path.join(APP_DIR, "assets")   # 形象素材目录（优香动画帧）
@@ -566,7 +700,8 @@ class PetApp:
 
         # ---- NORP 本地 API 对接 ----
         self._api_online = False      # NORP 本地 API 是否在线
-        self._norp_state = "none"     # none=未运行 / exe=EXE进程在跑(无API) / api=API在线
+        self._norp_state = "none"     # none=未运行 / exe=旧版EXE在跑(无API) / exe_new=新版EXE在跑(无API) / api=API在线
+        self._norp_label = ""         # 当前 NORP 的版本标签（如 "20260810 新版"）
         self._api_check_at = 0.0      # 下次探测 API 的时间
         self._api_check_interval = 5.0
         self._event_box = queue.Queue()   # 轮询线程 → UI 线程 的事件队列
@@ -752,24 +887,44 @@ class PetApp:
                 else:
                     self.say("躲墙角好无聊……还是出来找sensei玩吧！", expr="happy")
 
-        # NORP 状态定期探测（5 秒一次）：API 在线 > EXE 进程在跑 > 未运行
+        # NORP 状态定期探测（5 秒一次）：以「最近启动的 NORP 进程」为准。
         # 在线状态由 _poll_loop 后台线程每 3 秒探测并回写 _api_online，
         # 这里只读标志——绝不在 Tk 主线程发同步 HTTP 请求（NORP 关闭时
         # 连接可能等 2 秒超时，期间全局鼠标钩子无法响应 → 整机卡顿）。
+        # ★ 版本适配：新版（20260810+，norp.agent.exe）没有本地 API。
+        #   若用户最新启动的是新版，即使 17777 上有旧版残留 API 在线，
+        #   也不把它当作当前 NORP —— 当前 NORP 永远是最近启动的那个。
         if now >= self._api_check_at:
             self._api_check_at = now + self._api_check_interval
             online = self._api_online
-            proc = online or self.check_norp_process()
-            state = "api" if online else ("exe" if proc else "none")
+            latest = self.latest_norp_proc()      # 最近启动的 NORP 进程
+            if latest is not None:
+                label = latest["label"]
+                if latest["has_api"] is False:
+                    state = "exe_new"             # 新版 EXE：无本地 API
+                else:
+                    state = "api" if online else "exe"
+            else:
+                # 没有 exe 进程：API 在线说明源码版（python 运行）在跑
+                state = "api" if online else "none"
+                label = ""
             if state != self._norp_state:
                 self._norp_state = state
                 self._api_online = online
+                self._norp_label = label
                 if state == "api":
                     self._start_polling()
-                    self.say("已连接 NORP Agent～有啥任务尽管说！", expr="happy")
+                    self.say("已连接 NORP Agent（%s）～有啥任务尽管说！" % label
+                             if label else "已连接 NORP Agent～有啥任务尽管说！",
+                             expr="happy")
                 elif state == "exe":
                     self._task_running = False
                     self.say("看到 NORP Agent 在运行（EXE 版）～\n但它不带本地 API，收发任务功能用不了", expr="talk")
+                elif state == "exe_new":
+                    self._task_running = False
+                    self._stop_polling()
+                    self.say("检测到 NORP Agent（%s）正在运行～\n新版不带本地 API，任务播报用不了，但我会一直陪你干活！"
+                             % label, expr="happy")
                 else:
                     self._task_running = False
 
@@ -1826,33 +1981,228 @@ class PetApp:
         except Exception:
             return False
 
-    def launch_norp(self, extra_args=None):
-        """打开 NORP Agent：已在线则直接连接，否则启动进程并等待 API 就绪。"""
-        if self.check_norp_api():
-            self.say("NORP Agent 已经在运行啦～", expr="happy")
-            self._start_polling()
-            return
-        if self.check_norp_process():
-            self.say("检测到 EXE 版 NORP 正在运行～\n它不带本地 API，我无法收发任务。要完整功能请先关闭 EXE 再让我启动源码版", expr="talk")
-            self._norp_state = "exe"
-            return
-        mode = self.cfg.get("norp_launch_mode", "source")
+    def scan_norp_processes(self):
+        """枚举所有 NORP Agent 进程（纯 Win32 API），按启动时间降序返回。
+
+        每项：{"pid", "name", "path", "created", "label", "has_api"}
+          · name    小写 exe 名（norp_agent.exe 旧版 / norp.agent.exe 新版）
+          · path    exe 完整路径（取不到为空串）
+          · created 进程创建时间（epoch 秒，取不到为 0）
+          · label   版本标签（如 "20260810 新版"）
+          · has_api 该版本是否带本地 API：新版 False / 旧版 True / 未知 None
+        """
+        if sys.platform != "win32":
+            return []
+        results = []
         try:
+            import ctypes
+            from ctypes import wintypes
+
+            class PROCESSENTRY32W(ctypes.Structure):
+                _fields_ = [
+                    ("dwSize", wintypes.DWORD),
+                    ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                    ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", ctypes.c_wchar * 260),
+                ]
+
+            kernel32 = ctypes.windll.kernel32
+            kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+            kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+            kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+            kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.QueryFullProcessImageNameW.argtypes = [
+                wintypes.HANDLE, wintypes.DWORD, ctypes.c_wchar_p,
+                ctypes.POINTER(wintypes.DWORD)]
+            kernel32.GetProcessTimes.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(ctypes.c_ulonglong), ctypes.POINTER(ctypes.c_ulonglong),
+                ctypes.POINTER(ctypes.c_ulonglong), ctypes.POINTER(ctypes.c_ulonglong)]
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            _NORP_EXE_NAMES = ("norp_agent.exe", "norp.agent.exe")
+
+            def _proc_info(pid):
+                info = {"path": "", "created": 0.0}
+                h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                                         False, pid)
+                if h:
+                    try:
+                        buf = ctypes.create_unicode_buffer(32768)
+                        size = wintypes.DWORD(len(buf))
+                        if kernel32.QueryFullProcessImageNameW(
+                                h, 0, buf, ctypes.byref(size)):
+                            info["path"] = buf.value
+                        ct = ctypes.c_ulonglong()
+                        et = ctypes.c_ulonglong()
+                        kt = ctypes.c_ulonglong()
+                        ut = ctypes.c_ulonglong()
+                        if kernel32.GetProcessTimes(
+                                h, ctypes.byref(ct), ctypes.byref(et),
+                                ctypes.byref(kt), ctypes.byref(ut)):
+                            # FILETIME → unix epoch
+                            info["created"] = (ct.value - 116444736000000000) / 1e7
+                    finally:
+                        kernel32.CloseHandle(h)
+                return info
+
+            snap = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+            if not snap or snap == -1:
+                return []
+            try:
+                entry = PROCESSENTRY32W()
+                entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+                if not kernel32.Process32FirstW(snap, ctypes.byref(entry)):
+                    return []
+                while True:
+                    name = (entry.szExeFile or "").lower()
+                    if name in _NORP_EXE_NAMES:
+                        info = _proc_info(entry.th32ProcessID)
+                        path = info["path"] or name
+                        label = _version_label(path)
+                        p = path.lower()
+                        # 版本判定：路径特征优先，文件名兜底
+                        if ("20260810" in p or "main_update" in p
+                                or name == "norp.agent.exe"):
+                            has_api = False      # 新版：无本地 API
+                        elif ("20260807" in p or "update20260807" in p
+                              or name == "norp_agent.exe"):
+                            has_api = True       # 旧版：默认带本地 API
+                        else:
+                            has_api = None
+                        results.append({"pid": entry.th32ProcessID,
+                                        "name": name, "path": path,
+                                        "created": info["created"],
+                                        "label": label, "has_api": has_api})
+                    if not kernel32.Process32NextW(snap, ctypes.byref(entry)):
+                        break
+            finally:
+                kernel32.CloseHandle(snap)
+        except Exception:
+            pass
+        results.sort(key=lambda p: p["created"], reverse=True)
+        return results
+
+    def latest_norp_proc(self):
+        """最近启动的 NORP Agent 进程（None = 没在跑）。
+
+        「当前正在使用的 NORP」= 最近启动的那个 —— 双击打开的
+        永远是本地上一个（最近）启动的版本，而不是残留的旧版 API。
+        """
+        procs = self.scan_norp_processes()
+        return procs[0] if procs else None
+
+    def _focus_norp_window(self, proc=None):
+        """把正在运行的 NORP 窗口带到前台（找不到/失败就静默跳过）。"""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            SW_RESTORE = 9
+            found = []
+
+            @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            def _cb(hwnd, lparam):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if 0 < length <= 200:
+                        buf = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buf, length + 1)
+                        if "NORP" in buf.value.upper():
+                            found.append(hwnd)
+                return True
+
+            user32.EnumWindows(_cb, 0)
+            for hwnd in found:
+                user32.ShowWindow(hwnd, SW_RESTORE)
+                try:
+                    user32.SetForegroundWindow(hwnd)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def launch_norp(self, extra_args=None):
+        """打开 NORP Agent：已在运行则聚焦它；否则启动「最新版本」。
+
+        ★ 版本适配：不再先查 17777 API（旧版残留 API 在线会误判成
+        「已经在运行」），而是先查最近启动的 NORP 进程：
+          1. 有进程在跑 → 把它的窗口带到前台（就是用户正在用的那个）；
+          2. 没在跑 → 优先启动上次启动过的版本（norp_last_exe），
+             其次按配置，配置失效则自动探测工作区里的最新版本。
+        """
+        latest = self.latest_norp_proc()
+        if latest is not None:
+            self._focus_norp_window(latest)
+            if latest["has_api"] is False:
+                self._norp_state = "exe_new"
+                self._norp_label = latest["label"]
+                self._stop_polling()
+                self.say("NORP Agent（%s）已经在运行啦～\n新版不带本地 API，任务播报用不了，但我会一直陪你干活！"
+                         % latest["label"], expr="happy")
+            elif self.check_norp_api():
+                self._norp_state = "api"
+                self._norp_label = latest["label"]
+                self._start_polling()
+                self.say("NORP Agent（%s）已经在运行啦～" % latest["label"],
+                         expr="happy")
+            else:
+                self._norp_state = "exe"
+                self._norp_label = latest["label"]
+                self.say("检测到 EXE 版 NORP（%s）正在运行～\n它没开本地 API，收发任务功能用不了"
+                         % latest["label"], expr="talk")
+            return
+
+        # ── 没在运行：选启动目标 ──
+        # ① 上次启动过的版本（「双击打开的是本地上一个启动的版本」）
+        last_exe = self.cfg.get("norp_last_exe", "")
+        mode = self.cfg.get("norp_launch_mode", "source")
+        target = None
+        if last_exe and os.path.isfile(last_exe):
+            target = ("exe", last_exe, _version_label(last_exe))
+        # ② 按配置的启动方式/路径
+        if target is None:
             if mode == "source":
                 src = self.cfg.get("norp_source_dir") or DEFAULT_SOURCE_DIR
-                main_py = os.path.join(src, "main.py")
-                if not os.path.exists(main_py):
-                    self.say("找不到源码版 main.py…\n请在设置里检查路径", expr="sad")
-                    return
-                subprocess.Popen([self._background_python(), main_py],
-                                 cwd=src,
+                if os.path.isfile(os.path.join(src, "main.py")):
+                    target = ("src", src, _version_label(src))
+            else:
+                exe = self.cfg.get("norp_exe") or DEFAULT_EXE
+                if os.path.isfile(exe):
+                    target = ("exe", exe, _version_label(exe))
+        # ③ 自动探测工作区里的最新版本（exe 优先）
+        if target is None:
+            installs = _find_norp_installs(ROOT_DIR)
+            exe_it = next((it for it in installs if it["kind"] == "exe"), None)
+            src_it = next((it for it in installs if it["kind"] == "src"), None)
+            if exe_it:
+                target = ("exe", exe_it["path"], exe_it["label"])
+            elif src_it:
+                target = ("src", src_it["path"], src_it["label"])
+            else:
+                self.say("找不到 NORP Agent 啦…\n请在设置里检查路径", expr="sad")
+                return
+
+        kind, path, label = target
+        try:
+            if kind == "src":
+                subprocess.Popen([self._background_python(),
+                                  os.path.join(path, "main.py")],
+                                 cwd=path,
                                  creationflags=(subprocess.CREATE_NO_WINDOW |
                                                 subprocess.CREATE_NEW_PROCESS_GROUP))
             else:
-                exe = self.cfg.get("norp_exe") or DEFAULT_EXE
-                if not os.path.exists(exe):
-                    self.say("找不到 NORP Agent 啦…\n请在设置里检查路径", expr="sad")
-                    return
                 args = []
                 if extra_args:
                     args.extend(extra_args)
@@ -1860,30 +2210,47 @@ class PetApp:
                     tpl = self.cfg.get("norp_args", "").strip()
                     if tpl:
                         args.extend(shlex.split(tpl))
-                subprocess.Popen([exe] + args, cwd=os.path.dirname(exe),
+                subprocess.Popen([path] + args, cwd=os.path.dirname(path),
                                  creationflags=subprocess.CREATE_NO_WINDOW)
+                self.cfg["norp_last_exe"] = path     # 记住上次启动的版本
+                save_config(self.cfg)
             self.say("NORP Agent 启动中～正在连接…", expr="talk")
         except Exception as ex:
             self.say(f"启动失败：{ex}", expr="sad")
             return
 
-        # 等待本地 API 就绪（最长 norp_api_wait 秒）
-        wait = int(self.cfg.get("norp_api_wait", 25))
+        # ── 等待本地 API 就绪 ──
+        # 新版（20260810+）没有本地 API：只短等 5 秒，API 没来就正常
+        # 判定为 exe_new，不报错；源码版/旧版才按 norp_api_wait 等待。
+        is_new_exe = kind == "exe" and label.startswith("20260810")
+        wait = 5 if is_new_exe else int(self.cfg.get("norp_api_wait", 25))
         deadline = time.time() + wait
         while time.time() < deadline:
             time.sleep(1.0)
             if self.check_norp_api():
                 self._api_online = True
                 self._norp_state = "api"
+                self._norp_label = label
                 self._start_polling()
                 self.say("连接成功！NORP Agent 已就绪～", expr="happy")
                 return
         self._api_online = False
-        self.say("NORP Agent 已启动，但本地 API 没就绪…\n"
-                 "（请确认使用的是源码版，且 local_api_enabled=true）", expr="sad")
+        if is_new_exe:
+            self._norp_state = "exe_new"
+            self._norp_label = label
+            self._stop_polling()
+            self.say("NORP Agent（%s）已启动～\n新版不带本地 API，任务播报用不了，但我会一直陪你干活！"
+                     % label, expr="happy")
+        else:
+            self.say("NORP Agent 已启动，但本地 API 没就绪…\n"
+                     "（请确认使用的是源码版，且 local_api_enabled=true）", expr="sad")
 
     def send_command_to_norp(self, text=None, session_id=""):
         """把任务真正发送给 NORP Agent（通过本地 API）。"""
+        if self._norp_state == "exe_new":
+            self.say("NORP（%s）正在运行，但新版没有本地 API…\n收发任务需要旧版源码版（20260807）"
+                     % self._norp_label, expr="sad")
+            return
         if not self.check_norp_api():
             if self._norp_state == "exe":
                 self.say("NORP 正在运行（EXE 版）但不带本地 API…\n收发任务需要源码版，右键→设置 可切换", expr="sad")
@@ -1956,7 +2323,8 @@ class PetApp:
                 def do_GET(self):
                     if self.path.rstrip("/") == "/pet/status":
                         self._send(200, {"online": True, "expr": pet.expr,
-                                         "norp_state": pet._norp_state})
+                                         "norp_state": pet._norp_state,
+                                         "norp_version": getattr(pet, "_norp_label", "")})
                     else:
                         self._send(404, {"error": "not found"})
 
@@ -2021,14 +2389,27 @@ class PetApp:
                                              name="norp-event-poll")
         self._poll_thread.start()
 
+    def _stop_polling(self):
+        """停止事件轮询（新版 NORP 无 API 时调用，不再轮询 17777，
+        避免误连旧版残留 API 的事件流）。线程为 daemon，自然退出。"""
+        self._poll_stop.set()
+        self._poll_thread = None
+
     def _poll_loop(self):
         """后台线程：探测 API 在线状态 + 长轮询 NORP 事件流。
 
         在线状态写回 self._api_online（简单赋值，原子），UI 线程只读
         该标志、绝不自己发同步 HTTP 请求 —— 同步请求会卡 Tk 主线程，
         NORP 关闭时连接被拖到超时（2s），期间 WH_MOUSE_LL 钩子回调
-        也无法响应 → 整机鼠标周期性卡顿。"""
+        也无法响应 → 整机鼠标周期性卡顿。
+
+        ★ 版本适配：当前 NORP 是新版（exe_new，无本地 API）时不再
+        轮询 17777 —— 端口上的旧版残留 API 不是用户正在用的 NORP。
+        """
         while not self._poll_stop.is_set():
+            if self._norp_state == "exe_new":
+                time.sleep(3)
+                continue
             online = self.check_norp_api()
             self._api_online = online      # 后台线程探测 → UI 线程只读标志
             if not online:
@@ -2241,6 +2622,8 @@ class PetApp:
         menu = tk.Menu(self.root, tearoff=0, font=FONT)
         if self._norp_state == "api":
             status = "🟢 已连接 · API"
+        elif self._norp_state == "exe_new":
+            status = "🟡 运行中 · 新版EXE"
         elif self._norp_state == "exe":
             status = "🟡 运行中 · EXE"
         else:

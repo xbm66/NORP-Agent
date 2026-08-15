@@ -20,7 +20,7 @@ NORP Pet Bridge 插件（v2.0 —— 宠物整个塞进来了）
 
 PLUGIN_NAME = "NORP Pet Bridge"
 PLUGIN_PUBLISHER = "norp-pet"
-PLUGIN_VERSION = "2.1.1"
+PLUGIN_VERSION = "2.1.0"
 PLUGIN_DESCRIPTION = "桌面小伙伴已完整内嵌插件：启动自动唤出、退出自动回收、崩溃自愈；含好感度/陪伴天数/名字自定义/节日问候养成系统"
 
 import json
@@ -272,10 +272,19 @@ def execute(tool_name: str, args: dict, context) -> str:
             data = _pet_request("GET", "/pet/status")
             if data is None:
                 return "🐾 宠物当前**不在线**。可以用 pet_launch 把它叫出来。"
+            state = data.get("norp_state", "?")
+            ver = data.get("norp_version", "")
+            state_map = {
+                "api": "🟢 已连接（本地 API）",
+                "exe": "🟡 运行中（EXE，无 API）",
+                "exe_new": "🟡 运行中（新版 EXE，无 API）",
+                "none": "🔴 未运行",
+            }
+            line = "  • NORP 连接状态：%s" % state_map.get(state, state)
+            if ver:
+                line += "（%s）" % ver
             return ("🐾 宠物在线！\n"
-                    "  • 表情：%s\n"
-                    "  • NORP 连接状态：%s" % (data.get("expr", "?"),
-                                                data.get("norp_state", "?")))
+                    "  • 表情：%s\n" % data.get("expr", "?") + line)
 
         if tool_name == "pet_launch":
             _user_quit = False            # 用户主动唤出 → 看门狗接管守护
