@@ -67,6 +67,11 @@ class ConfigManager:
             "plugin_security_require_permissions": True,   # ★ 默认开启：插件必须声明权限
             "plugin_security_resource_limit": False,
 
+            # 移动端远程控制（默认不启用：host=127.0.0.1 仅本机可访问）
+            "remote_enabled": False,
+            "remote_host": "127.0.0.1",
+            "remote_port": 8090,
+
             # ★ P0-1 进程级隔离：插件严禁直接挂载到主进程。
             #   "process"（默认）= 在独立子进程加载并执行插件；
             #   "inprocess" = 旧行为（仅限开发调试，不推荐）。
