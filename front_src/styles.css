@@ -1862,3 +1862,53 @@ body {
 #loading-overlay.error .loading-progress {
     display: none;
 }
+
+/* ── SSH 远程运维面板 ── */
+.ssh-tabs {
+    display: flex;
+    gap: 6px;
+    margin: 12px 0;
+    flex-wrap: wrap;
+    border-bottom: 1px solid #333;
+    padding-bottom: 8px;
+}
+.ssh-tab {
+    padding: 6px 14px;
+    font-size: 13px;
+    border: 1px solid #444;
+    background: transparent;
+    color: #bbb;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.ssh-tab:hover {
+    background: #2a2a2a;
+    color: #fff;
+}
+.ssh-tab.active {
+    background: #007aff;
+    border-color: #007aff;
+    color: #fff;
+}
+.ssh-panel {
+    padding: 4px 2px;
+}
+.ssh-host-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.ssh-host-table th, .ssh-host-table td {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid #2a2a2a;
+    vertical-align: middle;
+}
+.ssh-host-table th {
+    color: #888;
+    font-weight: 600;
+    font-size: 12px;
+}
+.ssh-host-table tr:hover td {
+    background: #1e1e1e;
+}
