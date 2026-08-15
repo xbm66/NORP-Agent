@@ -1,7 +1,9 @@
 # NORP Agent
 
+Copyright (c) 2026 xingluosama,MIT Licensed
+
 > Vibe Coding Agent —— 桌面端 AI 编程 / 自动化助手（异步架构）
-> Copyright (c) 2026 xingluosama
+
 
 NORP Agent 是一个运行在 Windows 桌面上的 AI Agent 应用：它通过大语言模型（LLM）驱动，可以在你的工作区里阅读代码、编写文件、执行命令、搜索网页、管理笔记，并通过**插件系统**与**视觉 API** 无限扩展能力。
 
@@ -279,7 +281,7 @@ def execute(tool_name: str, args: dict, context) -> str:
 
 ## 常见问题
 
-**Q：启动报错缺少依赖？**
+**Q：启动源代码报错缺少依赖？**
 运行 `pip install -r requirements.txt`。
 
 **Q：插件加载失败 / 被拦截？**
@@ -310,4 +312,5 @@ NORP Agent 已通过 `instance.lock` 做重复启动检测，确认后允许多�
 ## 致谢与许可
 
 - 项目作者：xingluosama
-- 本项目仅供学习与研究使用，请遵守所在地区的法律法规与相关服务条款。
+- NORP Studios
+- 使用时请遵守所在地区的法律法规与相关服务条款。
