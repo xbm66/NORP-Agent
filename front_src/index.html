@@ -213,6 +213,8 @@
         <button id="about-btn" data-i18n="about">About</button>
         <button id="balance-btn" data-i18n="balance">Balance</button>
         <button id="key-btn" data-i18n="key">Key</button>
+        <button id="ssh-btn" data-i18n="ssh">🔌 SSH</button>
+        <button id="remote-btn">📱 移动端</button>
         <button id="settings-btn" data-i18n="settings">Settings</button>
         <button id="stop-btn" class="btn-stop" data-i18n="stop">Stop</button>
     </div>
@@ -517,6 +519,20 @@
         </div>
         <!-- end 视觉 API -->
 
+        <!-- 移动端远程控制 -->
+        <h3 style="margin-top:12px;">📱 移动端远程控制</h3>
+        <div style="margin-bottom:8px;">
+            <div class="checkbox-row">
+                <input type="checkbox" id="cfg-remote-enabled">
+                <label for="cfg-remote-enabled">启用远程访问（重启生效）</label>
+            </div>
+            <label>绑定地址（0.0.0.0 = 允许局域网访问）</label>
+            <input type="text" id="cfg-remote-host" placeholder="127.0.0.1">
+            <label>端口</label>
+            <input type="number" id="cfg-remote-port" min="1" max="65535" value="8090">
+            <div class="checkbox-desc">默认 127.0.0.1 仅本机可访问（手机连不上）。改成 0.0.0.0 并重启后，手机可通过局域网扫码/链接访问。⚠️ 暴露到局域网 = 同网段设备可控制你的 Agent。</div>
+        </div>
+
         <!-- 🛠️ 调试入口 -->
         <div style="margin-top:16px;padding-top:12px;border-top:1px dashed #ccc;">
             <button id="debug-btn" class="btn-debug" style="width:100%;">🛠️ 调试（Agent 运行诊断）</button>
@@ -531,6 +547,133 @@
                 <button class="btn-secondary" id="settings-cancel" data-i18n="cancel">Cancel</button>
                 <button class="btn-primary" id="settings-save-btn" data-i18n="save">Save</button>
             </div>
+        </div>
+    </div>
+</div>
+
+<div id="ssh-modal" class="modal">
+    <div class="modal-content" style="max-width:880px;">
+        <h2>🔌 SSH 远程运维</h2>
+        <div class="ssh-tabs">
+            <button class="ssh-tab active" data-tab="hosts">主机管理</button>
+            <button class="ssh-tab" data-tab="exec">执行命令</button>
+            <button class="ssh-tab" data-tab="transfer">文件传输</button>
+            <button class="ssh-tab" data-tab="tunnel">隧道</button>
+            <button class="ssh-tab" data-tab="cluster">集群</button>
+            <button class="ssh-tab" data-tab="terminal">终端</button>
+        </div>
+
+        <div class="ssh-panel" id="ssh-panel-hosts">
+            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
+                <input type="text" id="ssh-host-search" placeholder="搜索别名/主机/标签…" style="flex:1;">
+                <button class="btn-small" id="ssh-host-import">导入 ~/.ssh/config</button>
+                <button class="btn-small" id="ssh-host-refresh">刷新</button>
+            </div>
+            <div id="ssh-host-list" style="max-height:260px;overflow:auto;"></div>
+            <div style="margin-top:10px;border-top:1px solid #333;padding-top:10px;">
+                <div class="flex-row" style="gap:6px;flex-wrap:wrap;">
+                    <input type="text" id="ssh-f-alias" placeholder="别名*">
+                    <input type="text" id="ssh-f-host" placeholder="主机*">
+                    <input type="text" id="ssh-f-user" placeholder="用户">
+                    <input type="number" id="ssh-f-port" placeholder="端口" value="22" style="width:80px;">
+                    <select id="ssh-f-auth"><option value="key">密钥</option><option value="password">密码</option></select>
+                </div>
+                <div class="flex-row" style="gap:6px;flex-wrap:wrap;margin-top:6px;">
+                    <input type="text" id="ssh-f-identity" placeholder="私钥路径 ~/.ssh/id_rsa" style="flex:1;">
+                    <input type="password" id="ssh-f-password" placeholder="密码(密码认证时)">
+                    <input type="text" id="ssh-f-jump" placeholder="跳板机">
+                    <input type="text" id="ssh-f-tags" placeholder="标签(逗号分隔)">
+                </div>
+                <div class="btn-row" style="margin-top:8px;">
+                    <button class="btn-primary" id="ssh-host-add">添加 / 更新</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="ssh-panel" id="ssh-panel-exec" style="display:none;">
+            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
+                <select id="ssh-exec-host" style="flex:1;"></select>
+                <input type="number" id="ssh-exec-timeout" value="60" style="width:80px;" title="超时秒数">
+            </div>
+            <textarea id="ssh-exec-cmd" placeholder="要执行的命令，如 df -h" style="width:100%;height:70px;"></textarea>
+            <div class="btn-row" style="margin-top:8px;">
+                <button class="btn-primary" id="ssh-exec-run">执行</button>
+            </div>
+            <pre id="ssh-exec-output" style="background:#0f1115;color:#d0d0d0;padding:10px;border-radius:8px;max-height:260px;overflow:auto;white-space:pre-wrap;font-size:12px;margin-top:8px;display:none;"></pre>
+        </div>
+
+        <div class="ssh-panel" id="ssh-panel-transfer" style="display:none;">
+            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
+                <select id="ssh-xfer-host" style="flex:1;"></select>
+            </div>
+            <div style="border:1px solid #333;border-radius:8px;padding:10px;margin-bottom:8px;">
+                <div style="font-size:12px;color:#888;margin-bottom:4px;">上传（本机 → 远程）</div>
+                <div class="flex-row" style="gap:6px;">
+                    <input type="text" id="ssh-up-local" placeholder="本地文件路径" style="flex:1;">
+                    <button class="btn-small" id="ssh-up-browse">浏览</button>
+                </div>
+                <input type="text" id="ssh-up-remote" placeholder="远程目标路径" style="width:100%;margin-top:6px;">
+                <div class="btn-row" style="margin-top:6px;"><button class="btn-primary" id="ssh-up-go">上传</button></div>
+            </div>
+            <div style="border:1px solid #333;border-radius:8px;padding:10px;">
+                <div style="font-size:12px;color:#888;margin-bottom:4px;">下载（远程 → 本机）</div>
+                <input type="text" id="ssh-down-remote" placeholder="远程文件路径" style="width:100%;">
+                <div class="flex-row" style="gap:6px;margin-top:6px;">
+                    <input type="text" id="ssh-down-local" placeholder="本地保存路径" style="flex:1;">
+                    <button class="btn-small" id="ssh-down-browse">浏览</button>
+                </div>
+                <div class="btn-row" style="margin-top:6px;"><button class="btn-primary" id="ssh-down-go">下载</button></div>
+            </div>
+        </div>
+
+        <div class="ssh-panel" id="ssh-panel-tunnel" style="display:none;">
+            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
+                <select id="ssh-tun-host" style="flex:1;"></select>
+                <input type="number" id="ssh-tun-remote-port" placeholder="远程端口" style="width:90px;">
+                <input type="text" id="ssh-tun-remote-host" placeholder="远程主机" value="127.0.0.1" style="width:120px;">
+                <button class="btn-primary" id="ssh-tun-start">开隧道</button>
+            </div>
+            <div class="btn-row" style="margin-bottom:8px;"><button class="btn-small btn-danger" id="ssh-tun-stop-all">关闭全部</button></div>
+            <div id="ssh-tun-list" style="max-height:220px;overflow:auto;"></div>
+        </div>
+
+        <div class="ssh-panel" id="ssh-panel-cluster" style="display:none;">
+            <textarea id="ssh-cl-cmd" placeholder="在每台主机执行的命令" style="width:100%;height:70px;"></textarea>
+            <div class="flex-row" style="gap:6px;margin-top:8px;flex-wrap:wrap;">
+                <input type="text" id="ssh-cl-aliases" placeholder="别名(逗号,留空=全部)" style="flex:1;">
+                <input type="text" id="ssh-cl-tags" placeholder="标签(逗号)" style="width:130px;">
+                <input type="text" id="ssh-cl-env" placeholder="环境" style="width:100px;">
+                <button class="btn-primary" id="ssh-cl-run">批量执行</button>
+            </div>
+            <div id="ssh-cl-result" style="max-height:260px;overflow:auto;margin-top:8px;"></div>
+        </div>
+
+        <div class="ssh-panel" id="ssh-panel-terminal" style="display:none;">
+            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
+                <select id="ssh-term-host" style="flex:1;"></select>
+                <button class="btn-primary" id="ssh-term-open">连接</button>
+                <button class="btn-danger" id="ssh-term-close">断开</button>
+            </div>
+            <div id="ssh-term-output" style="background:#0f1115;color:#d0d0d0;padding:10px;border-radius:8px;height:300px;overflow:auto;white-space:pre-wrap;font-family:Consolas,monospace;font-size:13px;">未连接</div>
+            <div class="flex-row" style="gap:6px;margin-top:8px;">
+                <input type="text" id="ssh-term-input" placeholder="输入命令，回车发送" style="flex:1;">
+                <button class="btn-small" id="ssh-term-send">发送</button>
+            </div>
+        </div>
+
+        <div class="btn-row" style="justify-content:flex-end;margin-top:12px;">
+            <button class="btn-secondary" id="ssh-close">关闭</button>
+        </div>
+    </div>
+</div>
+
+<div id="remote-modal" class="modal">
+    <div class="modal-content" style="max-width:460px;">
+        <h2>📱 移动端远程控制</h2>
+        <p style="font-size:12px;color:#888;margin-top:2px;">扫码或在手机上打开链接，即可远程控制当前工作区</p>
+        <div id="remote-body" style="margin:10px 0;"></div>
+        <div class="btn-row" style="justify-content:flex-end;">
+            <button class="btn-secondary" id="remote-close">关闭</button>
         </div>
     </div>
 </div>
