@@ -1277,6 +1277,24 @@ function handleEvent(event, tab) {
         if (replyText.indexOf('NORP安全系统拦截') !== -1 || replyText.indexOf('NORP safety') !== -1) {
             _handleNorpBlock(replyText, tab);
         }
+    } else if (event.indexOf('M:') === 0) {
+        // 用户消息（可能来自移动端等其它客户端），同步渲染到本端
+        var msgText = event.slice(2);
+        var lastMsg = chatContent.lastElementChild;
+        if (lastMsg && lastMsg.classList && lastMsg.classList.contains('user-msg')) {
+            var lastInner = lastMsg.querySelector('.user-text');
+            if (lastInner && (lastInner.textContent || '').trim() === msgText.trim()) {
+                return;
+            }
+        }
+        var uDiv = document.createElement('div');
+        uDiv.className = 'message user-msg';
+        var uInner = document.createElement('div');
+        uInner.className = 'user-text';
+        uInner.textContent = msgText;
+        uDiv.appendChild(uInner);
+        chatContent.appendChild(uDiv);
+        scrollChatToBottom();
     } else if (event.indexOf('C:') === 0) {
         flushAccumulated();
         appendOrAccumulateCommand(event.slice(2));
@@ -1737,6 +1755,7 @@ async function loadHistory() {
                 }
                 chatContent.appendChild(div);
             }
+            _idleSyncCount = history.length;
             scrollChatToBottom();
         }
         try {
@@ -1758,6 +1777,22 @@ async function loadHistory() {
     } catch(e) {
         console.warn('Failed to load history:', e);
     }
+}
+
+// ── 空闲同步：其它端（如移动端）发消息时，桌面端空闲状态下自动重绘 ──
+var _idleSyncCount = 0;
+
+function idleSync() {
+    if (isStreaming) return;
+    var tab = getActiveTab();
+    if (!tab || !tab.dbId) return;
+    window.pywebview.api.get_initial_messages(tab.dbId).then(function(history) {
+        var n = (history && history.length) || 0;
+        if (n !== _idleSyncCount) {
+            chatContent.innerHTML = '';
+            loadHistory();
+        }
+    }).catch(function(){});
 }
 
 async function handleSend() {

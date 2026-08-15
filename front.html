@@ -1873,6 +1873,56 @@ body {
 #loading-overlay.error .loading-progress {
     display: none;
 }
+
+/* ── SSH 远程运维面板 ── */
+.ssh-tabs {
+    display: flex;
+    gap: 6px;
+    margin: 12px 0;
+    flex-wrap: wrap;
+    border-bottom: 1px solid #333;
+    padding-bottom: 8px;
+}
+.ssh-tab {
+    padding: 6px 14px;
+    font-size: 13px;
+    border: 1px solid #444;
+    background: transparent;
+    color: #bbb;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.ssh-tab:hover {
+    background: #2a2a2a;
+    color: #fff;
+}
+.ssh-tab.active {
+    background: #007aff;
+    border-color: #007aff;
+    color: #fff;
+}
+.ssh-panel {
+    padding: 4px 2px;
+}
+.ssh-host-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.ssh-host-table th, .ssh-host-table td {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid #2a2a2a;
+    vertical-align: middle;
+}
+.ssh-host-table th {
+    color: #888;
+    font-weight: 600;
+    font-size: 12px;
+}
+.ssh-host-table tr:hover td {
+    background: #1e1e1e;
+}
 </style>
 </head>
 <body>
@@ -2078,6 +2128,8 @@ body {
         <button id="about-btn" data-i18n="about">About</button>
         <button id="balance-btn" data-i18n="balance">Balance</button>
         <button id="key-btn" data-i18n="key">Key</button>
+        <button id="ssh-btn" data-i18n="ssh">🔌 SSH</button>
+        <button id="remote-btn">📱 移动端</button>
         <button id="settings-btn" data-i18n="settings">Settings</button>
         <button id="stop-btn" class="btn-stop" data-i18n="stop">Stop</button>
     </div>
@@ -2382,6 +2434,20 @@ body {
         </div>
         <!-- end 视觉 API -->
 
+        <!-- 移动端远程控制 -->
+        <h3 style="margin-top:12px;">📱 移动端远程控制</h3>
+        <div style="margin-bottom:8px;">
+            <div class="checkbox-row">
+                <input type="checkbox" id="cfg-remote-enabled">
+                <label for="cfg-remote-enabled">启用远程访问（重启生效）</label>
+            </div>
+            <label>绑定地址（0.0.0.0 = 允许局域网访问）</label>
+            <input type="text" id="cfg-remote-host" placeholder="127.0.0.1">
+            <label>端口</label>
+            <input type="number" id="cfg-remote-port" min="1" max="65535" value="8090">
+            <div class="checkbox-desc">默认 127.0.0.1 仅本机可访问（手机连不上）。改成 0.0.0.0 并重启后，手机可通过局域网扫码/链接访问。⚠️ 暴露到局域网 = 同网段设备可控制你的 Agent。</div>
+        </div>
+
         <!-- 🛠️ 调试入口 -->
         <div style="margin-top:16px;padding-top:12px;border-top:1px dashed #ccc;">
             <button id="debug-btn" class="btn-debug" style="width:100%;">🛠️ 调试（Agent 运行诊断）</button>
@@ -2396,6 +2462,133 @@ body {
                 <button class="btn-secondary" id="settings-cancel" data-i18n="cancel">Cancel</button>
                 <button class="btn-primary" id="settings-save-btn" data-i18n="save">Save</button>
             </div>
+        </div>
+    </div>
+</div>
+
+<div id="ssh-modal" class="modal">
+    <div class="modal-content" style="max-width:880px;">
+        <h2>🔌 SSH 远程运维</h2>
+        <div class="ssh-tabs">
+            <button class="ssh-tab active" data-tab="hosts">主机管理</button>
+            <button class="ssh-tab" data-tab="exec">执行命令</button>
+            <button class="ssh-tab" data-tab="transfer">文件传输</button>
+            <button class="ssh-tab" data-tab="tunnel">隧道</button>
+            <button class="ssh-tab" data-tab="cluster">集群</button>
+            <button class="ssh-tab" data-tab="terminal">终端</button>
+        </div>
+
+        <div class="ssh-panel" id="ssh-panel-hosts">
+            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
+                <input type="text" id="ssh-host-search" placeholder="搜索别名/主机/标签…" style="flex:1;">
+                <button class="btn-small" id="ssh-host-import">导入 ~/.ssh/config</button>
+                <button class="btn-small" id="ssh-host-refresh">刷新</button>
+            </div>
+            <div id="ssh-host-list" style="max-height:260px;overflow:auto;"></div>
+            <div style="margin-top:10px;border-top:1px solid #333;padding-top:10px;">
+                <div class="flex-row" style="gap:6px;flex-wrap:wrap;">
+                    <input type="text" id="ssh-f-alias" placeholder="别名*">
+                    <input type="text" id="ssh-f-host" placeholder="主机*">
+                    <input type="text" id="ssh-f-user" placeholder="用户">
+                    <input type="number" id="ssh-f-port" placeholder="端口" value="22" style="width:80px;">
+                    <select id="ssh-f-auth"><option value="key">密钥</option><option value="password">密码</option></select>
+                </div>
+                <div class="flex-row" style="gap:6px;flex-wrap:wrap;margin-top:6px;">
+                    <input type="text" id="ssh-f-identity" placeholder="私钥路径 ~/.ssh/id_rsa" style="flex:1;">
+                    <input type="password" id="ssh-f-password" placeholder="密码(密码认证时)">
+                    <input type="text" id="ssh-f-jump" placeholder="跳板机">
+                    <input type="text" id="ssh-f-tags" placeholder="标签(逗号分隔)">
+                </div>
+                <div class="btn-row" style="margin-top:8px;">
+                    <button class="btn-primary" id="ssh-host-add">添加 / 更新</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="ssh-panel" id="ssh-panel-exec" style="display:none;">
+            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
+                <select id="ssh-exec-host" style="flex:1;"></select>
+                <input type="number" id="ssh-exec-timeout" value="60" style="width:80px;" title="超时秒数">
+            </div>
+            <textarea id="ssh-exec-cmd" placeholder="要执行的命令，如 df -h" style="width:100%;height:70px;"></textarea>
+            <div class="btn-row" style="margin-top:8px;">
+                <button class="btn-primary" id="ssh-exec-run">执行</button>
+            </div>
+            <pre id="ssh-exec-output" style="background:#0f1115;color:#d0d0d0;padding:10px;border-radius:8px;max-height:260px;overflow:auto;white-space:pre-wrap;font-size:12px;margin-top:8px;display:none;"></pre>
+        </div>
+
+        <div class="ssh-panel" id="ssh-panel-transfer" style="display:none;">
+            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
+                <select id="ssh-xfer-host" style="flex:1;"></select>
+            </div>
+            <div style="border:1px solid #333;border-radius:8px;padding:10px;margin-bottom:8px;">
+                <div style="font-size:12px;color:#888;margin-bottom:4px;">上传（本机 → 远程）</div>
+                <div class="flex-row" style="gap:6px;">
+                    <input type="text" id="ssh-up-local" placeholder="本地文件路径" style="flex:1;">
+                    <button class="btn-small" id="ssh-up-browse">浏览</button>
+                </div>
+                <input type="text" id="ssh-up-remote" placeholder="远程目标路径" style="width:100%;margin-top:6px;">
+                <div class="btn-row" style="margin-top:6px;"><button class="btn-primary" id="ssh-up-go">上传</button></div>
+            </div>
+            <div style="border:1px solid #333;border-radius:8px;padding:10px;">
+                <div style="font-size:12px;color:#888;margin-bottom:4px;">下载（远程 → 本机）</div>
+                <input type="text" id="ssh-down-remote" placeholder="远程文件路径" style="width:100%;">
+                <div class="flex-row" style="gap:6px;margin-top:6px;">
+                    <input type="text" id="ssh-down-local" placeholder="本地保存路径" style="flex:1;">
+                    <button class="btn-small" id="ssh-down-browse">浏览</button>
+                </div>
+                <div class="btn-row" style="margin-top:6px;"><button class="btn-primary" id="ssh-down-go">下载</button></div>
+            </div>
+        </div>
+
+        <div class="ssh-panel" id="ssh-panel-tunnel" style="display:none;">
+            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
+                <select id="ssh-tun-host" style="flex:1;"></select>
+                <input type="number" id="ssh-tun-remote-port" placeholder="远程端口" style="width:90px;">
+                <input type="text" id="ssh-tun-remote-host" placeholder="远程主机" value="127.0.0.1" style="width:120px;">
+                <button class="btn-primary" id="ssh-tun-start">开隧道</button>
+            </div>
+            <div class="btn-row" style="margin-bottom:8px;"><button class="btn-small btn-danger" id="ssh-tun-stop-all">关闭全部</button></div>
+            <div id="ssh-tun-list" style="max-height:220px;overflow:auto;"></div>
+        </div>
+
+        <div class="ssh-panel" id="ssh-panel-cluster" style="display:none;">
+            <textarea id="ssh-cl-cmd" placeholder="在每台主机执行的命令" style="width:100%;height:70px;"></textarea>
+            <div class="flex-row" style="gap:6px;margin-top:8px;flex-wrap:wrap;">
+                <input type="text" id="ssh-cl-aliases" placeholder="别名(逗号,留空=全部)" style="flex:1;">
+                <input type="text" id="ssh-cl-tags" placeholder="标签(逗号)" style="width:130px;">
+                <input type="text" id="ssh-cl-env" placeholder="环境" style="width:100px;">
+                <button class="btn-primary" id="ssh-cl-run">批量执行</button>
+            </div>
+            <div id="ssh-cl-result" style="max-height:260px;overflow:auto;margin-top:8px;"></div>
+        </div>
+
+        <div class="ssh-panel" id="ssh-panel-terminal" style="display:none;">
+            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
+                <select id="ssh-term-host" style="flex:1;"></select>
+                <button class="btn-primary" id="ssh-term-open">连接</button>
+                <button class="btn-danger" id="ssh-term-close">断开</button>
+            </div>
+            <div id="ssh-term-output" style="background:#0f1115;color:#d0d0d0;padding:10px;border-radius:8px;height:300px;overflow:auto;white-space:pre-wrap;font-family:Consolas,monospace;font-size:13px;">未连接</div>
+            <div class="flex-row" style="gap:6px;margin-top:8px;">
+                <input type="text" id="ssh-term-input" placeholder="输入命令，回车发送" style="flex:1;">
+                <button class="btn-small" id="ssh-term-send">发送</button>
+            </div>
+        </div>
+
+        <div class="btn-row" style="justify-content:flex-end;margin-top:12px;">
+            <button class="btn-secondary" id="ssh-close">关闭</button>
+        </div>
+    </div>
+</div>
+
+<div id="remote-modal" class="modal">
+    <div class="modal-content" style="max-width:460px;">
+        <h2>📱 移动端远程控制</h2>
+        <p style="font-size:12px;color:#888;margin-top:2px;">扫码或在手机上打开链接，即可远程控制当前工作区</p>
+        <div id="remote-body" style="margin:10px 0;"></div>
+        <div class="btn-row" style="justify-content:flex-end;">
+            <button class="btn-secondary" id="remote-close">关闭</button>
         </div>
     </div>
 </div>
@@ -6346,6 +6539,24 @@ function handleEvent(event, tab) {
         if (replyText.indexOf('NORP安全系统拦截') !== -1 || replyText.indexOf('NORP safety') !== -1) {
             _handleNorpBlock(replyText, tab);
         }
+    } else if (event.indexOf('M:') === 0) {
+        // 用户消息（可能来自移动端等其它客户端），同步渲染到本端
+        var msgText = event.slice(2);
+        var lastMsg = chatContent.lastElementChild;
+        if (lastMsg && lastMsg.classList && lastMsg.classList.contains('user-msg')) {
+            var lastInner = lastMsg.querySelector('.user-text');
+            if (lastInner && (lastInner.textContent || '').trim() === msgText.trim()) {
+                return;
+            }
+        }
+        var uDiv = document.createElement('div');
+        uDiv.className = 'message user-msg';
+        var uInner = document.createElement('div');
+        uInner.className = 'user-text';
+        uInner.textContent = msgText;
+        uDiv.appendChild(uInner);
+        chatContent.appendChild(uDiv);
+        scrollChatToBottom();
     } else if (event.indexOf('C:') === 0) {
         flushAccumulated();
         appendOrAccumulateCommand(event.slice(2));
@@ -6806,6 +7017,7 @@ async function loadHistory() {
                 }
                 chatContent.appendChild(div);
             }
+            _idleSyncCount = history.length;
             scrollChatToBottom();
         }
         try {
@@ -6827,6 +7039,22 @@ async function loadHistory() {
     } catch(e) {
         console.warn('Failed to load history:', e);
     }
+}
+
+// ── 空闲同步：其它端（如移动端）发消息时，桌面端空闲状态下自动重绘 ──
+var _idleSyncCount = 0;
+
+function idleSync() {
+    if (isStreaming) return;
+    var tab = getActiveTab();
+    if (!tab || !tab.dbId) return;
+    window.pywebview.api.get_initial_messages(tab.dbId).then(function(history) {
+        var n = (history && history.length) || 0;
+        if (n !== _idleSyncCount) {
+            chatContent.innerHTML = '';
+            loadHistory();
+        }
+    }).catch(function(){});
 }
 
 async function handleSend() {
@@ -7120,6 +7348,11 @@ async function openSettings() {
     document.getElementById('cfg-jailbreak-guard-action').value = config.jailbreak_guard_action || 'block';
     updateJailbreakGuardStatus();
 
+    // 移动端远程控制
+    document.getElementById('cfg-remote-enabled').checked = config.remote_enabled === true;
+    document.getElementById('cfg-remote-host').value = config.remote_host || '127.0.0.1';
+    document.getElementById('cfg-remote-port').value = config.remote_port || 8090;
+
     // Custom system prompt
     document.getElementById('cfg-custom-prompt-enabled').checked = config.custom_system_prompt_enabled || false;
     document.getElementById('cfg-custom-prompt-source').value = config.custom_system_prompt_file ? 'file' : 'text';
@@ -7286,6 +7519,9 @@ async function saveSettings() {
         jailbreak_guard_action: document.getElementById('cfg-jailbreak-guard-action').value,
         vision_enabled: document.getElementById('cfg-vision-enabled').checked,
         vision_service_url: document.getElementById('cfg-vision-service-url').value.trim(),
+        remote_enabled: document.getElementById('cfg-remote-enabled').checked,
+        remote_host: document.getElementById('cfg-remote-host').value.trim() || '127.0.0.1',
+        remote_port: parseInt(document.getElementById('cfg-remote-port').value) || 8090,
     };
 
     try {
@@ -8921,6 +9157,9 @@ window.addEventListener('pywebviewready', async function() {
             dismissLoadingOverlay();
         }, 700);
 
+        // ── 启动空闲同步：其它端（如移动端）发消息时，桌面端自动重绘 ──
+        setInterval(idleSync, 1200);
+
     } catch(e) {
         config = {};
         userInput.disabled = false;
@@ -9179,6 +9418,418 @@ window.addEventListener('unhandledrejection', function(event) {
         }
     }, CHECK_INTERVAL);
 })();
+
+// ═══════════════════════════════════════════════════════════════
+//  SSH — Remote ops panel
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+//  SSH — 远程运维面板
+//  主机管理 / 执行 / 传输 / 隧道 / 集群
+// ═══════════════════════════════════════════════════════════════
+
+function sshEsc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function sshApi(name) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return window.pywebview.api[name].apply(window.pywebview.api, args);
+}
+
+function openSsh() {
+    document.getElementById('ssh-modal').style.display = 'block';
+    sshSwitchTab('hosts');
+}
+
+function closeSsh() {
+    document.getElementById('ssh-modal').style.display = 'none';
+}
+
+function sshSwitchTab(tab) {
+    document.querySelectorAll('.ssh-tab').forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-tab') === tab);
+    });
+    ['hosts', 'exec', 'transfer', 'tunnel', 'cluster', 'terminal'].forEach(function (name) {
+        var el = document.getElementById('ssh-panel-' + name);
+        if (el) el.style.display = (name === tab) ? 'block' : 'none';
+    });
+    if (tab === 'hosts') sshRefreshHosts();
+    if (tab === 'exec' || tab === 'transfer' || tab === 'tunnel' || tab === 'terminal') sshPopulateHostSelects();
+    if (tab === 'tunnel') sshTunnelList();
+    if (tab === 'terminal') sshTermEnsure();
+}
+
+// ── 主机管理 ────────────────────────────────────────────────────
+async function sshRefreshHosts() {
+    var list = document.getElementById('ssh-host-list');
+    var q = document.getElementById('ssh-host-search').value || '';
+    var hosts = [];
+    try { hosts = await sshApi('ssh_list_hosts', q); } catch (e) { hosts = []; }
+    if (!hosts || !hosts.length) {
+        list.innerHTML = '<div style="color:#888;padding:8px;">暂无主机。用下方表单添加，或点「导入 ~/.ssh/config」。</div>';
+        return;
+    }
+    var html = '<table class="ssh-host-table"><thead><tr>' +
+        '<th>别名</th><th>主机</th><th>用户</th><th>端口</th><th>认证</th><th>密钥</th><th>标签</th><th>操作</th>' +
+        '</tr></thead><tbody>';
+    hosts.forEach(function (h) {
+        var auth = h.auth === 'password' ? '🔒密码' : '🔑密钥';
+        var key = (h.auth !== 'password' && h.identity_file) ? (h.key_ready ? '✅' : '⚠️') : '—';
+        var tags = (h.tags || []).join(',');
+        html += '<tr>' +
+            '<td><b>' + sshEsc(h.alias) + '</b></td>' +
+            '<td>' + sshEsc(h.host) + '</td>' +
+            '<td>' + sshEsc(h.user) + '</td>' +
+            '<td>' + h.port + '</td>' +
+            '<td>' + auth + '</td>' +
+            '<td>' + key + '</td>' +
+            '<td>' + sshEsc(tags) + '</td>' +
+            '<td>' +
+                '<button class="btn-small" data-test="' + sshEsc(h.alias) + '">测</button> ' +
+                '<button class="btn-small btn-danger" data-del="' + sshEsc(h.alias) + '">删</button>' +
+            '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table>';
+    list.innerHTML = html;
+    list.querySelectorAll('[data-test]').forEach(function (b) {
+        b.onclick = function () { sshTestHost(b.getAttribute('data-test')); };
+    });
+    list.querySelectorAll('[data-del]').forEach(function (b) {
+        b.onclick = function () { sshDelHost(b.getAttribute('data-del')); };
+    });
+}
+
+async function sshAddHost() {
+    var g = function (id) { return document.getElementById(id).value.trim(); };
+    var entry = {
+        alias: g('ssh-f-alias'), host: g('ssh-f-host'), user: g('ssh-f-user'),
+        port: parseInt(g('ssh-f-port') || '22', 10),
+        auth: document.getElementById('ssh-f-auth').value,
+        identity_file: g('ssh-f-identity'), password: document.getElementById('ssh-f-password').value,
+        jump: g('ssh-f-jump'), tags: g('ssh-f-tags')
+    };
+    if (!entry.alias || !entry.host) { alert('别名 和 主机 为必填'); return; }
+    var r = await sshApi('ssh_add_host', entry);
+    alert(r.message || (r.ok ? '已保存' : '保存失败'));
+    sshRefreshHosts();
+}
+
+async function sshDelHost(alias) {
+    if (!confirm('确认删除主机 ' + alias + ' ？')) return;
+    var r = await sshApi('ssh_remove_host', alias);
+    alert(r.message || '');
+    sshRefreshHosts();
+}
+
+async function sshTestHost(alias) {
+    var r = await sshApi('ssh_test_host', alias, 12);
+    alert((r.ok ? '✅ ' : '❌ ') + (r.message || ''));
+}
+
+async function sshImportConfig() {
+    var r = await sshApi('ssh_import_config');
+    alert(r.message || '');
+    sshRefreshHosts();
+}
+
+// ── 主机下拉框（执行/传输/隧道共用）─────────────────────────────
+async function sshPopulateHostSelects() {
+    var hosts = [];
+    try { hosts = await sshApi('ssh_list_hosts', ''); } catch (e) { hosts = []; }
+    ['ssh-exec-host', 'ssh-xfer-host', 'ssh-tun-host', 'ssh-term-host'].forEach(function (id) {
+        var sel = document.getElementById(id);
+        if (!sel) return;
+        var cur = sel.value;
+        sel.innerHTML = '';
+        (hosts || []).forEach(function (h) {
+            var o = document.createElement('option');
+            o.value = h.alias;
+            o.textContent = h.alias + ' (' + h.host + ')';
+            sel.appendChild(o);
+        });
+        if (cur) sel.value = cur;
+    });
+}
+
+// ── 执行 ────────────────────────────────────────────────────────
+async function sshExecRun() {
+    var host = document.getElementById('ssh-exec-host').value;
+    var cmd = document.getElementById('ssh-exec-cmd').value;
+    var timeout = parseInt(document.getElementById('ssh-exec-timeout').value) || 60;
+    if (!host || !cmd) { alert('请选主机并输入命令'); return; }
+    var out = document.getElementById('ssh-exec-output');
+    out.style.display = 'block';
+    out.textContent = '执行中…';
+    var r = await sshApi('ssh_exec_cmd', host, cmd, timeout);
+    out.textContent = (r.stdout ? r.stdout : '') +
+        (r.stderr ? '\n[stderr] ' + r.stderr : '') +
+        '\n[exit ' + r.rc + ']';
+}
+
+// ── 传输 ────────────────────────────────────────────────────────
+async function sshUpload() {
+    var host = document.getElementById('ssh-xfer-host').value;
+    var local = document.getElementById('ssh-up-local').value.trim();
+    var remote = document.getElementById('ssh-up-remote').value.trim();
+    if (!host || !local || !remote) { alert('请选主机并填写路径'); return; }
+    var r = await sshApi('ssh_upload_file', host, local, remote);
+    alert(r.message || (r.ok ? '上传成功' : '上传失败'));
+}
+
+async function sshDownload() {
+    var host = document.getElementById('ssh-xfer-host').value;
+    var remote = document.getElementById('ssh-down-remote').value.trim();
+    var local = document.getElementById('ssh-down-local').value.trim();
+    if (!host || !remote || !local) { alert('请选主机并填写路径'); return; }
+    var r = await sshApi('ssh_download_file', host, remote, local);
+    alert(r.message || (r.ok ? '下载成功' : '下载失败'));
+}
+
+async function sshPickUpload() {
+    try { var p = await sshApi('pick_open_file'); if (typeof p === 'string' && p) document.getElementById('ssh-up-local').value = p; } catch (e) {}
+}
+
+async function sshPickDownload() {
+    try { var p = await sshApi('pick_save_file'); if (typeof p === 'string' && p) document.getElementById('ssh-down-local').value = p; } catch (e) {}
+}
+
+// ── 隧道 ────────────────────────────────────────────────────────
+async function sshTunnelStart() {
+    var host = document.getElementById('ssh-tun-host').value;
+    var rp = parseInt(document.getElementById('ssh-tun-remote-port').value);
+    var rh = document.getElementById('ssh-tun-remote-host').value.trim() || '127.0.0.1';
+    if (!host || !rp) { alert('请选主机并填远程端口'); return; }
+    var r = await sshApi('ssh_tunnel_start', host, rp, rh, 0);
+    alert(r.message || '');
+    sshTunnelList();
+}
+
+async function sshTunnelList() {
+    var list = document.getElementById('ssh-tun-list');
+    var ts = [];
+    try { ts = await sshApi('ssh_tunnel_list'); } catch (e) { ts = []; }
+    if (!ts || !ts.length) { list.innerHTML = '<div style="color:#888;padding:6px;">没有活动隧道</div>'; return; }
+    var html = '';
+    ts.forEach(function (t) {
+        html += '<div class="flex-row" style="gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid #2a2a2a;">' +
+            '<span>' + (t.alive ? '🟢' : '🔴') + ' ' + sshEsc(t.id) + '</span>' +
+            '<span style="color:#888;font-size:12px;">127.0.0.1:' + t.local_port + ' → ' + sshEsc(t.remote) + '</span>' +
+            '<span style="flex:1;"></span>' +
+            '<button class="btn-small btn-danger" data-tstop="' + sshEsc(t.id) + '">关闭</button>' +
+            '</div>';
+    });
+    list.innerHTML = html;
+    list.querySelectorAll('[data-tstop]').forEach(function (b) {
+        b.onclick = function () { sshTunnelStop(b.getAttribute('data-tstop')); };
+    });
+}
+
+async function sshTunnelStop(id) {
+    var r = await sshApi('ssh_tunnel_stop', id);
+    alert(r.message || '');
+    sshTunnelList();
+}
+
+async function sshTunnelStopAll() {
+    var r = await sshApi('ssh_tunnel_stop_all');
+    alert(r.message || '');
+    sshTunnelList();
+}
+
+// ── 集群 ────────────────────────────────────────────────────────
+async function sshClusterRun() {
+    var cmd = document.getElementById('ssh-cl-cmd').value;
+    if (!cmd) { alert('请输入命令'); return; }
+    var aliases = document.getElementById('ssh-cl-aliases').value.trim().split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    var tags = document.getElementById('ssh-cl-tags').value.trim().split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    var env = document.getElementById('ssh-cl-env').value.trim();
+    var res = [];
+    try { res = await sshApi('ssh_cluster_run', cmd, aliases, env, tags, 60, 8); } catch (e) { res = []; }
+    var el = document.getElementById('ssh-cl-result');
+    if (!res || !res.length) { el.innerHTML = '<div style="color:#888;">没有匹配的主机</div>'; return; }
+    var html = '';
+    res.forEach(function (r) {
+        html += '<div style="padding:6px 0;border-bottom:1px solid #2a2a2a;">' +
+            '<b>' + (r.rc === 0 ? '✅' : '❌') + ' ' + sshEsc(r.alias) + '</b> (exit ' + r.rc + ')' +
+            '<pre style="margin:4px 0 0;white-space:pre-wrap;font-size:12px;color:#ccc;">' + sshEsc(r.output) + '</pre></div>';
+    });
+    el.innerHTML = html;
+}
+
+// ── 终端 ────────────────────────────────────────────────────────
+var sshTermId = null;
+var sshTermTimer = null;
+
+function sshStripAnsi(s) {
+    return String(s || '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+}
+
+async function sshTermOpen() {
+    var host = document.getElementById('ssh-term-host').value;
+    if (!host) { alert('请先选主机'); return; }
+    var r = await sshApi('ssh_terminal_open', host);
+    if (!r || !r.ok) { alert((r && r.message) || '连接失败'); return; }
+    sshTermId = r.terminal_id;
+    document.getElementById('ssh-term-output').textContent = '';
+    sshTermPoll();
+    if (sshTermTimer) clearInterval(sshTermTimer);
+    sshTermTimer = setInterval(sshTermPoll, 300);
+}
+
+async function sshTermPoll() {
+    if (!sshTermId) return;
+    var r = await sshApi('ssh_terminal_read', sshTermId);
+    var out = document.getElementById('ssh-term-output');
+    if (r && r.data) {
+        out.textContent += sshStripAnsi(r.data);
+        out.scrollTop = out.scrollHeight;
+    }
+    if (r && r.closed) {
+        out.textContent += '\n[连接已关闭]';
+        sshTermStop();
+    }
+}
+
+async function sshTermSend() {
+    var input = document.getElementById('ssh-term-input');
+    var text = input.value;
+    if (!sshTermId) { alert('未连接'); return; }
+    input.value = '';
+    await sshApi('ssh_terminal_write', sshTermId, text + '\n');
+    sshTermPoll();
+}
+
+async function sshTermClose() {
+    if (sshTermId) { await sshApi('ssh_terminal_close', sshTermId); }
+    sshTermStop();
+    document.getElementById('ssh-term-output').textContent += '\n[已断开]';
+}
+
+function sshTermStop() {
+    sshTermId = null;
+    if (sshTermTimer) { clearInterval(sshTermTimer); sshTermTimer = null; }
+}
+
+function sshTermEnsure() {
+    sshPopulateHostSelects();
+    if (sshTermId && !sshTermTimer) sshTermTimer = setInterval(sshTermPoll, 300);
+}
+
+// ── 事件绑定 ────────────────────────────────────────────────────
+document.getElementById('ssh-btn').addEventListener('click', openSsh);
+document.getElementById('ssh-close').addEventListener('click', closeSsh);
+document.getElementById('ssh-host-add').addEventListener('click', sshAddHost);
+document.getElementById('ssh-host-refresh').addEventListener('click', sshRefreshHosts);
+document.getElementById('ssh-host-import').addEventListener('click', sshImportConfig);
+document.getElementById('ssh-host-search').addEventListener('input', sshRefreshHosts);
+document.getElementById('ssh-exec-run').addEventListener('click', sshExecRun);
+document.getElementById('ssh-up-go').addEventListener('click', sshUpload);
+document.getElementById('ssh-down-go').addEventListener('click', sshDownload);
+document.getElementById('ssh-up-browse').addEventListener('click', sshPickUpload);
+document.getElementById('ssh-down-browse').addEventListener('click', sshPickDownload);
+document.getElementById('ssh-tun-start').addEventListener('click', sshTunnelStart);
+document.getElementById('ssh-tun-stop-all').addEventListener('click', sshTunnelStopAll);
+document.getElementById('ssh-cl-run').addEventListener('click', sshClusterRun);
+document.getElementById('ssh-term-open').addEventListener('click', sshTermOpen);
+document.getElementById('ssh-term-close').addEventListener('click', sshTermClose);
+document.getElementById('ssh-term-send').addEventListener('click', sshTermSend);
+document.getElementById('ssh-term-input').addEventListener('keydown', function (e) { if (e.key === 'Enter') sshTermSend(); });
+document.querySelectorAll('.ssh-tab').forEach(function (b) {
+    b.addEventListener('click', function () { sshSwitchTab(b.getAttribute('data-tab')); });
+});
+
+
+// ═══════════════════════════════════════════════════════════════
+//  Remote — Mobile remote control
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+//  移动端远程控制 —— 桌面端按钮 + 二维码/链接
+// ═══════════════════════════════════════════════════════════════
+
+function remoteEsc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function openRemote() {
+    document.getElementById('remote-modal').style.display = 'block';
+    refreshRemote();
+}
+
+function closeRemote() {
+    document.getElementById('remote-modal').style.display = 'none';
+}
+
+async function refreshRemote() {
+    var body = document.getElementById('remote-body');
+    var st = {};
+    try { st = await window.pywebview.api.get_remote_status(); } catch (e) { st = {}; }
+
+    if (!st.enabled) {
+        body.innerHTML = '<div style="background:#fff3cd;color:#664d03;padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.8;">' +
+            '此功能需要先<b>启用远程访问</b>才能让手机连上。<br>' +
+            '当前服务未启用，手机无法访问。<br>' +
+            '请前往 <b>设置 → 📱 移动端远程控制</b>：勾选「启用远程访问」，把绑定地址设为 <b>0.0.0.0</b>（或填写内网穿透的公网地址），然后<b>重启 NORP</b>。</div>';
+        return;
+    }
+    if (!st.running) {
+        body.innerHTML = '<div style="background:#fff3cd;color:#664d03;padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.8;">' +
+            '⚠️ 远程服务<b>启动失败</b>，很可能是端口被占用（例如 DeepSeek Harness 占用了 3080）。<br>' +
+            '请在 <b>设置 → 📱 移动端远程控制</b> 中换一个端口（如 <b>8090</b>），保存后<b>重启 NORP</b>。</div>';
+        return;
+    }
+    if (!st.lan_accessible) {
+        body.innerHTML = '<div style="background:#fff3cd;color:#664d03;padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.8;">' +
+            '当前服务仅绑定 <b>' + remoteEsc(st.host || '127.0.0.1') + '</b>，手机无法访问。<br>' +
+            '请在 <b>设置 → 📱 移动端远程控制</b> 中把绑定地址改为 <b>0.0.0.0</b> 并重启。</div>';
+        return;
+    }
+
+    var ips = st.lan_ips || [];
+    if (!ips.length) ips = ['127.0.0.1'];
+
+    var html = '<div style="font-size:13px;color:#888;">选择二维码指向的网络：</div>' +
+        '<select id="remote-net" style="width:100%;margin:6px 0;background:#1e232d;color:#e6e6e6;border:1px solid #333;border-radius:6px;padding:6px;">';
+    ips.forEach(function (ip) {
+        html += '<option value="' + remoteEsc(ip) + '">局域网 ' + remoteEsc(ip) + '</option>';
+    });
+    html += '</select>' +
+        '<div style="text-align:center;margin:12px 0;"><img id="remote-qr-img" alt="二维码" style="background:#fff;padding:8px;border-radius:8px;width:200px;height:200px;"></div>' +
+        '<div class="flex-row" style="gap:6px;">' +
+        '<input type="text" id="remote-link-input" readonly style="flex:1;background:#1e232d;color:#e6e6e6;border:1px solid #333;border-radius:6px;padding:6px 8px;font-size:12px;">' +
+        '<button class="btn-small" id="remote-copy">复制</button>' +
+        '</div>' +
+        '<div style="font-size:11px;color:#888;margin-top:6px;">手机与电脑在同一网络时，扫码或打开链接即可。</div>';
+    body.innerHTML = html;
+
+    function renderQr() {
+        var ip = document.getElementById('remote-net').value;
+        var url = 'http://' + ip + ':' + (st.port || 8090) + '/';
+        document.getElementById('remote-link-input').value = url;
+        window.pywebview.api.get_remote_qr(url).then(function (dataUrl) {
+            if (dataUrl) document.getElementById('remote-qr-img').src = dataUrl;
+        });
+    }
+    document.getElementById('remote-net').addEventListener('change', renderQr);
+    document.getElementById('remote-copy').addEventListener('click', function () {
+        var el = document.getElementById('remote-link-input');
+        el.select();
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(el.value).then(function () {
+                document.getElementById('remote-copy').textContent = '已复制';
+            });
+        }
+    });
+    renderQr();
+}
+
+document.getElementById('remote-btn').addEventListener('click', openRemote);
+document.getElementById('remote-close').addEventListener('click', closeRemote);
+
 </script>
 </body>
 </html>

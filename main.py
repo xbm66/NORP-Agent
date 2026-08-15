@@ -604,6 +604,11 @@ def _on_window_closing():
             if _tray_icon is None:
                 _setup_tray()
 
+            # ★ 修复：托盘不可用（如 pystray 未安装导致 _setup_tray 失败）时，
+            #    直接退出，避免「窗口藏起来却无法恢复/退出」造成僵尸进程。
+            if _tray_icon is None:
+                return True
+
             # 2. 用 BeginInvoke 延迟隐藏（脱离 FormClosing 生命周期）
             #    BeginInvoke 把委托投递到 UI 线程消息队列，在当前事件处理
             #    完成后才执行，不会被 WinForms 回滚。
@@ -703,6 +708,17 @@ _API_METHOD_NAMES = [
 
     # 调试面板
     'get_debug_data', 'open_debug_log_dir',
+
+    # SSH 运维（GUI 面板）
+    'ssh_list_hosts', 'ssh_add_host', 'ssh_remove_host', 'ssh_import_config',
+    'ssh_test_host', 'ssh_exec_cmd', 'ssh_upload_file', 'ssh_download_file',
+    'ssh_tunnel_start', 'ssh_tunnel_list', 'ssh_tunnel_stop', 'ssh_tunnel_stop_all',
+    'ssh_cluster_run',
+    'ssh_terminal_open', 'ssh_terminal_read', 'ssh_terminal_write',
+    'ssh_terminal_close', 'ssh_terminal_list',
+
+    # 移动端远程控制
+    'get_remote_status', 'get_lan_ips', 'get_remote_qr', 'get_active_session',
 
 ]
 
