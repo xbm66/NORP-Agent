@@ -13,6 +13,7 @@ NORP-Agent.spec — PyInstaller 打包配置 (onefile 单文件模式)
     _BASE_DIR    = sys._MEIPASS
     内含: front.html / app_icon.ico / plugin_system/（.py 源文件）
           capture_worker/capture_worker.exe
+          vision 全家桶（视觉模块整体打包，含横幅 UI，tkinter 自动收集）
     不内置任何插件（official_plugins / plugins 均不打入，
     插件系统本身完整可用，插件目录由用户通过插件控制面板自行添加）。
 """
@@ -64,14 +65,19 @@ hiddenimports = [
     "win32clipboard",
     # pythonnet (托盘 WinForms 通知)
     "clr",
-    # 视觉外挂
+    # 视觉外挂（视觉模块整体打包进 exe：vision_daemon 动态拉起横幅，
+    #   显式列出全部子模块确保完整编入 PYZ；tkinter 由 PyInstaller 自动收集）
     "vision",
     "vision_adapters",
     "vision_capture",
     "vision_coordinator",
     "vision_ipc",
+    "vision_ipc_transport",
     "vision_safety",
     "vision_actions",
+    "vision_daemon",
+    "vision_banner",
+    "vision_calibration",
     # ★ 插件系统（宿主子进程入口由 -m / --norp-plugin-host 动态触发，
     #   显式列出全部子模块确保完整编入 PYZ）
     "plugin_system",

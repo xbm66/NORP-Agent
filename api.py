@@ -4,9 +4,10 @@
 import os
 import sys
 import json
-import asyncio
+import nasync_io
 import base64
 import threading
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -21,8 +22,6 @@ from plugin_system.manager import PluginManager
 from lifecycle_manager import get_lifecycle_manager
 from sandbox_pool import get_sandbox_pool
 from jailbreak_guard import scan_message, JAILBREAK_HARDENING_PROMPT
-from ssh_service import SshService
-from remote_server import RemoteServer, lan_ips
 
 # 应用基础目录（main.py / api.py 所在目录，也是 official_plugins/ 的父目录）
 if getattr(sys, 'frozen', False):
@@ -212,7 +211,7 @@ class AgentAPI:
         self._attention_callback = None
 
         # Create default session
-        self._active_session_id = self._create_session_internal()
+        self._create_session_internal()
 
         # ── Plugin system ──
         cfg = self.config_manager.load()
@@ -231,23 +230,6 @@ class AgentAPI:
             self.plugin_manager.set_plugin_dirs([])
 
         self._ensure_project_root()
-
-        # ── SSH 运维引擎（GUI 面板 + norp_ssh 插件共享 hosts.json）──
-        self.ssh = SshService(app_dir)
-
-        # ── 移动端远程控制（默认不启用：remote_host=127.0.0.1）──
-        self.remote_server = None
-        self.remote_enabled = False
-        self.remote_host = "127.0.0.1"
-        self.remote_port = 8090
-        cfg = self.config_manager.load()
-        self.remote_enabled = bool(cfg.get("remote_enabled", False))
-        self.remote_host = str(cfg.get("remote_host", "127.0.0.1")).strip() or "127.0.0.1"
-        self.remote_port = int(cfg.get("remote_port", 8090) or 8090)
-        if self.remote_enabled:
-            self.remote_server = RemoteServer(self, self.remote_host, self.remote_port)
-            if not self.remote_server.start():
-                self.remote_server = None
 
     def _create_session_internal(self, workspace: str = "") -> str:
         """Create a new session and return its ID (caller must hold lock)."""
@@ -287,10 +269,15 @@ class AgentAPI:
             if len(self.sessions) <= 1:
                 return "error:Cannot close the last session"
             session = self.sessions[session_id]
-            if session.loop and session._loop_thread and session._loop_thread.is_alive():
-                session.loop.stop()
             del self.sessions[session_id]
-            return "ok"
+        # ★ 锁外停止：stop() 内含即时取消 + 杀进程组（taskkill 可能阻塞
+        # 数秒），若持 _sessions_lock 执行会拖住其他会话的增删操作。
+        if session.loop and session._loop_thread and session._loop_thread.is_alive():
+            try:
+                session.loop.stop()
+            except Exception:
+                pass
+        return "ok"
 
     def get_sessions(self) -> list:
         """Return a list of all session summaries."""
@@ -337,16 +324,6 @@ class AgentAPI:
                 "has_task": has_task,
                 "message_count": len(s.current_messages),
             }
-
-    def get_active_session(self) -> dict:
-        """返回当前活跃会话（最近一次 send_message 的会话），供移动端对齐桌面端。"""
-        with self._sessions_lock:
-            s = self.sessions.get(getattr(self, "_active_session_id", None))
-            if s is None and self.sessions:
-                s = next(iter(self.sessions.values()))
-            if s is None:
-                return {"id": "", "title": ""}
-            return {"id": s.session_id, "title": s.title}
 
     def _get_session(self, session_id: str) -> Session:
         """Get a session by ID. Falls back to first available if not found."""
@@ -423,10 +400,14 @@ class AgentAPI:
             custom_system_prompt=cfg.get("custom_system_prompt", "") if cfg.get("custom_system_prompt_enabled", False) else "",
         )
 
+        # ★ 新任务复位：清除上一轮任务遗留的停止/僵尸标记。
+        # 若不复位，任务运行期间 send_message 会把健康线程误判为
+        # 「已停止/僵尸」而抛弃，导致两个任务并行执行。
+        session._stopped = False
+        session._zombie = False
+
     def send_message(self, session_id: str, text: str) -> str:
         session = self._get_session(session_id)
-        # 记录最近活跃会话，供移动端对齐桌面端使用
-        self._active_session_id = session.session_id
 
         # ── 越狱/提示词注入检测 ──
         cfg = self.config_manager.load()
@@ -466,16 +447,32 @@ class AgentAPI:
 
         if session.loop and session._loop_thread and session._loop_thread.is_alive():
             if session._zombie or session._stopped:
-                # 僵尸进程：上次 stop 后线程未能退出（网络挂起等）
-                # 放弃等待 daemon 线程，创建新 loop 允许用户继续使用
-                print(f"[ZombieGuard] Abandoning zombie thread for session {session_id}, "
-                      f"creating new loop")
-                session._loop_thread = None
-                session.loop = None
-                session._zombie = False
+                # ── 停止竞态修复（配合即时停止架构）──
+                # 旧逻辑：只要 _stopped=True 且线程存活，立即判定为僵尸并抛弃。
+                # 问题：用户点停止后、线程退出前的那几毫秒内发新消息，
+                # 健康的旧线程会被误杀（两个任务并行执行）。
+                # 新逻辑：先等旧线程退出（即时停止保证毫秒级），
+                # 2 秒内仍未退出才判定为真僵尸，放弃等待。
+                print(f"[StopGuard] session {session_id}: previous task stopping, "
+                      f"waiting for thread exit")
+                session._loop_thread.join(timeout=2.0)
+                if session._loop_thread.is_alive():
+                    # 真僵尸：线程在 2 秒后仍未退出（网络挂起等）
+                    # 放弃等待 daemon 线程，创建新 loop 允许用户继续使用
+                    print(f"[ZombieGuard] Abandoning zombie thread for session {session_id}, "
+                          f"creating new loop")
+                    session._loop_thread = None
+                    session.loop = None
+                    session._zombie = False
                 session._stopped = False
             else:
                 return "error:" + translate_error("Task already running")
+        else:
+            # 旧任务已自然结束：复位停止/僵尸标记
+            # （自然终止路径会在 _run 中置 _stopped=True，必须复位，
+            #  否则下次任务运行期间会被误判为"已停止"而遭抛弃）
+            session._stopped = False
+            session._zombie = False
         try:
             self._create_loop(session)
         except RuntimeError as e:
@@ -483,19 +480,21 @@ class AgentAPI:
 
         session.current_messages.append({"role": "user", "content": text})
 
-        # 把用户消息也广播到事件流（M:），让桌面端流式渲染其它客户端（如移动端）发的消息
-        try:
-            session.event_queue.put("M:" + text)
-        except Exception:
-            pass
-
         print("[DEBUG] session:", session.session_id, "current_messages 长度:", len(session.current_messages))
         print("[DEBUG] memory_history 长度:", len(session.memory_history))
 
         def _run():
-            """在新线程中创建独立的事件循环，运行异步 AgentLoop。"""
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            """在新线程中创建独立的事件循环，运行异步 AgentLoop。
+
+            ★ 即时停止配合（自研架构）：
+            stop_task() 会通过 EventLoop.abort_main() 向主协程注入
+            CancelledError。AsyncAgentLoop.run() 已将其统一收口为
+            "stopped"，但若取消发生在 run() 协程启动之前（极快停止），
+            CancelledError 会从 run_until_complete 直接抛出，故此处
+            单独捕获，保证任务线程永远正常退出、事件流正确收尾。
+            """
+            loop = nasync_io.new_event_loop()
+            nasync_io.set_event_loop(loop)
             try:
                 current_history = session.current_messages.copy()
                 memory_content = session.get_memory_content(self.config_manager)
@@ -525,6 +524,12 @@ class AgentAPI:
                     # 任务自然终止（超时/停止/步数上限），标记 _stopped
                     # 确保下次 send_message 时僵尸检测能正确识别
                     session._stopped = True
+            except nasync_io.CancelledError:
+                # 取消发生在 run() 收口之前（任务启动瞬间被停止）：
+                # 直接按用户停止处理，事件流正常收尾
+                session.event_queue.put("E:Task stopped by user")
+                session.event_queue.signal_finish()
+                session._stopped = True
             except Exception as ex:
                 err = traceback.format_exc()
                 # 完整堆栈记录到日志（供调试），前端只显示友好提示
@@ -539,12 +544,14 @@ class AgentAPI:
                 session.event_queue.signal_finish()
                 session._stopped = True
             finally:
-                # 清理沙箱池中的资源
+                # 清理沙箱池中的资源。
+                # CancelledError 继承 BaseException，用 BaseException 兜底，
+                # 保证清理阶段任何异常（含取消残留）都不阻止线程退出。
                 try:
                     loop.run_until_complete(
                         session.loop.executor.cleanup()
                     )
-                except Exception:
+                except BaseException:
                     pass
                 loop.close()
 
@@ -585,12 +592,17 @@ class AgentAPI:
         if not session.loop:
             return "error:No active task"
 
-        # ── 僵尸进程防护：两阶段停止 ──
-        # Phase 1: 软停止 — 设置 stop_event，关闭 HTTP 传输层
+        # ── 僵尸进程防护：两阶段停止（配合自研即时停止）──
+        # Phase 1: 即时停止 — AsyncAgentLoop.stop() 内部走四层递进：
+        #   abort_main 取消主任务 → 事件置位 → 关闭 HTTP 传输层 → 杀进程组
+        # 主协程收到 CancelledError 后毫秒级展开退出，事件流正常收尾。
         session._stopped = True
+        _t0 = time.time()
         session.loop.stop()
 
         # Phase 2: 等待线程退出（最多 5 秒）
+        # 即时停止下线程应在毫秒级退出；5 秒仅是极端兜底
+        # （线程池中无法强杀的同步函数阻塞等）。
         if session._loop_thread and session._loop_thread.is_alive():
             session._loop_thread.join(timeout=5.0)
             if session._loop_thread.is_alive():
@@ -599,6 +611,10 @@ class AgentAPI:
                 print(f"[ZombieGuard] Thread for session {session_id} stuck after stop — "
                       f"abandoning as zombie (will not block future tasks)")
                 session._zombie = True
+            else:
+                session._zombie = False
+                _elapsed_ms = (time.time() - _t0) * 1000
+                print(f"[StopGuard] session {session_id} stopped in {_elapsed_ms:.0f} ms")
 
         return "stopped"
 
@@ -945,100 +961,6 @@ class AgentAPI:
 
     def get_plugin_dirs(self) -> list:
         return self.plugin_manager.plugin_dirs
-
-    # ═══════════════════════════════════════════════════════════════
-    #  SSH 运维（GUI 面板调用；与 norp_ssh 插件共享 hosts.json）
-    # ═══════════════════════════════════════════════════════════════
-    def ssh_list_hosts(self, query: str = "") -> list:
-        return self.ssh.list_hosts(query)
-
-    def ssh_add_host(self, entry: dict) -> dict:
-        return self.ssh.add_host(entry)
-
-    def ssh_remove_host(self, alias: str) -> dict:
-        return self.ssh.remove_host(alias)
-
-    def ssh_import_config(self) -> dict:
-        return self.ssh.import_config()
-
-    def ssh_test_host(self, alias: str, timeout: int = 12) -> dict:
-        return self.ssh.test(alias, timeout)
-
-    def ssh_exec_cmd(self, alias: str, command: str, timeout: int = 60) -> dict:
-        return self.ssh.exec_cmd(alias, command, timeout)
-
-    def ssh_upload_file(self, alias: str, local_path: str, remote_path: str) -> dict:
-        return self.ssh.upload(alias, local_path, remote_path)
-
-    def ssh_download_file(self, alias: str, remote_path: str, local_path: str) -> dict:
-        return self.ssh.download(alias, remote_path, local_path)
-
-    def ssh_tunnel_start(self, alias: str, remote_port: int,
-                         remote_host: str = "127.0.0.1", local_port: int = 0) -> dict:
-        return self.ssh.tunnel_start(alias, remote_port, remote_host, local_port)
-
-    def ssh_tunnel_list(self) -> list:
-        return self.ssh.tunnel_list()
-
-    def ssh_tunnel_stop(self, tunnel_id: str) -> dict:
-        return self.ssh.tunnel_stop(tunnel_id)
-
-    def ssh_tunnel_stop_all(self) -> dict:
-        return self.ssh.tunnel_stop_all()
-
-    def ssh_cluster_run(self, command: str, aliases: list = None, environment: str = "",
-                        tags: list = None, timeout: int = 60, max_workers: int = 8) -> list:
-        return self.ssh.cluster(command, aliases, environment, tags, timeout, max_workers)
-
-    def ssh_terminal_open(self, alias: str) -> dict:
-        return self.ssh.terminal_open(alias)
-
-    def ssh_terminal_read(self, terminal_id: str) -> dict:
-        return self.ssh.terminal_read(terminal_id)
-
-    def ssh_terminal_write(self, terminal_id: str, data: str) -> dict:
-        return self.ssh.terminal_write(terminal_id, data)
-
-    def ssh_terminal_close(self, terminal_id: str) -> dict:
-        return self.ssh.terminal_close(terminal_id)
-
-    def ssh_terminal_list(self) -> list:
-        return self.ssh.terminal_list()
-
-    # ═══════════════════════════════════════════════════════════════
-    #  移动端远程控制
-    # ═══════════════════════════════════════════════════════════════
-    def get_remote_status(self) -> dict:
-        return {
-            "enabled": self.remote_enabled,
-            "host": self.remote_host,
-            "port": self.remote_port,
-            "running": self.remote_server is not None,
-            "lan_accessible": self.remote_host in ("0.0.0.0", "::"),
-            "lan_ips": lan_ips(),
-        }
-
-    def get_lan_ips(self) -> list:
-        return lan_ips()
-
-    def get_remote_qr(self, url: str) -> str:
-        import base64
-        import io
-        try:
-            import qrcode
-        except Exception:
-            return ""
-        try:
-            qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M,
-                               box_size=6, border=2)
-            qr.add_data(url or "")
-            qr.make(fit=True)
-            img = qr.make_image(fill_color="black", back_color="white")
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
-        except Exception:
-            return ""
 
     def _resolve_plugin_dirs(self, dirs: list) -> list:
         """Normalise and deduplicate plugin directories by realpath.

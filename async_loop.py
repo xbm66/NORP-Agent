@@ -2,7 +2,7 @@
 # 从同步架构重构为异步架构
 # Copyright (c) 2026 xingluosama
 
-import asyncio
+import nasync_io
 import json
 import os
 import re
@@ -67,7 +67,7 @@ class AsyncAgentLoop:
     1. run() 改为 async，内部所有 I/O 操作异步化
     2. 工具执行通过 AsyncToolExecutor（集成沙箱池/文件IO队列等）
     3. 生命周期绑定：任务启动/停止通过 LifecycleManager 管理进程组
-    4. 停止机制：使用 asyncio.Event 替代 threading.Event
+    4. 停止机制：使用 nasync_io.Event 替代 threading.Event
     5. API 调用在线程池中执行（OpenAI SDK 是同步的），避免阻塞事件循环
     """
 
@@ -112,9 +112,12 @@ class AsyncAgentLoop:
         self.custom_system_prompt = custom_system_prompt
 
         # 异步事件
-        self._stop_event = asyncio.Event()
-        self._user_reply_event = asyncio.Event()
+        self._stop_event = nasync_io.Event()
+        self._user_reply_event = nasync_io.Event()
         self._user_reply_value = ""
+        # ★ 停止竞态防护：stop() 可能在 run() 协程启动前被调用（用户极快
+        # 点击停止），此标记保证 run() 不把已置位的 stop_event 清掉。
+        self._stop_requested = False
 
         # Token 统计
         self._last_usage = None
@@ -146,7 +149,7 @@ class AsyncAgentLoop:
         self._task_lifecycle: Optional[TaskLifecycle] = None
 
         # 事件循环引用（线程安全停止用）
-        self._agent_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._agent_loop: Optional[nasync_io.AbstractEventLoop] = None
 
         # ── 本地部署模式检测 ──
         # API Base URL 指向本机回环地址（localhost / 127.x / ::1）时，
@@ -312,10 +315,20 @@ class AsyncAgentLoop:
         """停止任务（同步接口，供 API 层调用）。
 
         可从任意线程调用（pywebview JS 桥接线程）。
-        使用 call_soon_threadsafe 将清理工作调度到 agent 的事件循环上，
-        避免在无事件循环的线程中调用 asyncio.ensure_future 导致 RuntimeError。
 
-        ★ 死锁修复：asyncio.Event 不是线程安全的。
+        ★ 即时停止（自研架构核心改进）：
+        标准 asyncio 没有从外部线程强制取消主任务的入口，停止只能等
+        当前 await 自然结束（工具最长 300s / 插件 120s / API 180s），
+        表现为「点停止后迟迟不停」。自研 EventLoop.abort_main() 直接
+        向主协程注入 CancelledError，立即中断当前 await，毫秒级退出。
+
+        停止分四层（从快到慢，层层兜底）：
+        1. abort_main()          — 取消主任务，立即展开协程栈
+        2. call_soon_threadsafe  — 置位 stop/user_reply 事件，唤醒等待中的协程
+        3. 关闭 HTTP 传输层     — 中断线程池中阻塞的流式请求
+        4. 生命周期杀进程组     — 终止 exec_cmd 等子进程树
+
+        ★ 死锁修复：nasync_io.Event 不是线程安全的。
         从外部线程直接 set() 时，Future.set_result 内部走 loop.call_soon
         （非 call_soon_threadsafe），不会写入自管道唤醒信号——
         若事件循环正阻塞在 selector.select() 上（例如 agent 正在
@@ -323,12 +336,11 @@ class AsyncAgentLoop:
         无人处理，导致 wait() 永久挂起（表现为"一直等待回复"）。
         必须通过 call_soon_threadsafe 把 set() 调度到 agent 事件循环线程，
         借助自管道唤醒机制立即生效。
-
-        ★ 僵尸进程防护：关闭 OpenAI HTTP 客户端传输层，中断阻塞中的网络请求。
-        即使线程池中的 _sync_stream 正阻塞在 for chunk in stream:，
-        关闭底层 TCP 连接会让 httpx 抛出 ReadError/ClosedError，
-        线程即可从阻塞中恢复并检查 _stop_event。
         """
+        # 停止请求标记：防 stop 与 run 启动竞态（run 不清理已置位的事件）
+        self._stop_requested = True
+
+        # 第 2 层：事件置位（循环线程内执行，自管道唤醒）
         if self._agent_loop and not self._agent_loop.is_closed():
             # 调度到事件循环线程执行 set()，唤醒阻塞中的协程
             self._agent_loop.call_soon_threadsafe(self._stop_event.set)
@@ -337,7 +349,16 @@ class AsyncAgentLoop:
             self._stop_event.set()
             self._user_reply_event.set()
 
-        # ★ 僵尸进程防护：关闭 HTTP 客户端传输层
+        # 第 1 层：即时取消主任务（若事件循环已启动）
+        # 置位事件后仍要取消主任务：事件只影响「检查点」，取消才能打断
+        # 正在 await 的工具/API 操作。
+        if self._agent_loop and not self._agent_loop.is_closed():
+            try:
+                self._agent_loop.abort_main()
+            except Exception:
+                pass
+
+        # 第 3 层：关闭 HTTP 客户端传输层
         # OpenAI SDK 底层使用 httpx.Client，关闭其传输层会中断所有进行中的请求
         # 这能让阻塞在 _sync_stream 线程中的 HTTP 流式读取立即抛出异常
         try:
@@ -352,7 +373,7 @@ class AsyncAgentLoop:
         except Exception:
             pass
 
-        # 生命周期：杀进程组
+        # 第 4 层：生命周期杀进程组
         if self._task_lifecycle:
             self.lifecycle_manager.stop_task(
                 self._task_lifecycle.task_id, reason="user_stop"
@@ -360,7 +381,7 @@ class AsyncAgentLoop:
         # 线程安全：将清理调度到 agent 专属事件循环
         if self._agent_loop and not self._agent_loop.is_closed():
             self._agent_loop.call_soon_threadsafe(
-                lambda: asyncio.ensure_future(self.executor.cleanup())
+                lambda: nasync_io.ensure_future(self.executor.cleanup())
             )
         # Plugin cleanup (fire shutdown hooks + reap zombie threads)
         if self.plugin_manager:
@@ -376,7 +397,7 @@ class AsyncAgentLoop:
     def provide_user_input(self, text: str):
         """提供用户输入（线程安全，可从任意线程调用）。
 
-        ★ 死锁修复：不能在外部线程直接调用 asyncio.Event.set()。
+        ★ 死锁修复：不能在外部线程直接调用 nasync_io.Event.set()。
         事件循环阻塞在 selector 上时收不到唤醒信号，_wait_for_user_input()
         会挂起至 30 分钟硬超时。必须通过 call_soon_threadsafe 调度到
         agent 事件循环线程执行（先写值、再 set，保证读取到的必是新值）。
@@ -420,11 +441,11 @@ class AsyncAgentLoop:
 
         try:
             # 30分钟硬超时：防止前端崩溃导致永久挂起
-            await asyncio.wait_for(
+            await nasync_io.wait_for(
                 self._user_reply_event.wait(),
                 timeout=1800.0  # 30 minutes
             )
-        except asyncio.TimeoutError:
+        except nasync_io.TimeoutError:
             # 用户交互超时：视为停止任务
             self._stop_event.set()
             if self._task_lifecycle:
@@ -512,9 +533,82 @@ class AsyncAgentLoop:
         except Exception:
             cfg = {}
         try:
-            self.approval = ApprovalPolicy(cfg)
+            hints = {}
+            if self.plugin_manager:
+                hints = self.plugin_manager.get_tool_approval_hints()
+            self.approval = ApprovalPolicy(cfg, tool_hints=hints)
         except Exception:
             pass
+
+    # ── 视觉 delegate 让渡状态（跨进程共享，主进程只读）──
+    _VISION_STATE_FNAME = "vision_state.json"
+
+    def _read_vision_delegate_state(self) -> Optional[dict]:
+        """读取视觉外挂插件的让渡状态（app_dir/vision_state.json）。
+
+        状态文件由视觉插件子进程原子写入，主进程审批层在此只读判断：
+        delegate 覆盖范围内的 L2 视觉工具调用可跳过审批弹窗
+        （用户已通过 vision_delegate 工具主动让渡确认权）。
+        读不到文件 / 格式损坏 → 返回 None（按需审批，安全方向不变）。
+        """
+        try:
+            state_path = os.path.join(self.app_dir, self._VISION_STATE_FNAME)
+            if not os.path.exists(state_path):
+                return None
+            # 文件可能正在被插件原子替换，宽松重试一次
+            for _ in range(2):
+                try:
+                    with open(state_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    break
+                except (OSError, json.JSONDecodeError):
+                    time.sleep(0.05)
+            else:
+                return None
+            delegate = data.get("delegate")
+            if not isinstance(delegate, dict):
+                return None
+            return delegate
+        except Exception:
+            return None
+
+    def _vision_delegate_covers(self, tool_name: str, tool_args: dict) -> bool:
+        """判断某次视觉工具调用是否处于 delegate 让渡免确认范围内。"""
+        delegate = self._read_vision_delegate_state()
+        if not delegate:
+            return False
+        try:
+            # 有效期
+            expires_at = float(delegate.get("expires_at", 0.0))
+            if expires_at <= time.time():
+                return False
+            # 工具风险级（取插件 APPROVAL_HINTS 中声明的 risk）
+            hints = {}
+            if self.plugin_manager:
+                hints = self.plugin_manager.get_tool_approval_hints()
+            hint = hints.get(tool_name) or {}
+            tool_risk = str(hint.get("risk", "")).upper()
+            if not tool_risk or tool_risk not in ("L0", "L1", "L2", "L3"):
+                return False
+            max_risk = str(delegate.get("max_risk", "L2")).upper()
+            if max_risk not in ("L0", "L1", "L2", "L3"):
+                return False
+            rank = {"L0": 0, "L1": 1, "L2": 2, "L3": 3}
+            if rank.get(tool_risk, 99) > rank.get(max_risk, 0):
+                return False
+            # 范围
+            scope = str(delegate.get("scope", "window"))
+            if scope == "session" or scope == "app":
+                return True
+            if scope == "window":
+                target = str(delegate.get("target_window", "") or "")
+                if not target:
+                    return False
+                hwnd = str(tool_args.get("hwnd", "") or "")
+                return hwnd and hwnd == target
+            return False
+        except Exception:
+            return False
 
     def _disable_native_confirm(self):
         """「不再显示」持久化：关闭原生工具确认总开关（设置面板配置）。"""
@@ -605,59 +699,34 @@ class AsyncAgentLoop:
 
     async def run(self, user_message: str, history: Optional[List[Dict]] = None,
                   memory_content: str = "") -> str:
-        """异步执行 Agent 主循环。"""
-        self._step_count = 0
-        self._last_usage = None
-        self._total_usage = {"input_tokens": 0, "output_tokens": 0, "tool_call_tokens": 0}
-        self._messages = []
-        self._memory_content = memory_content
+        """异步执行 Agent 主循环（对外入口 + 取消收口）。
 
-        self._task_start_time = time.time()
-        self._total_pause_duration = 0.0
-        self._pause_start_time = 0.0
-        self._stop_event.clear()
-
-        # ── 调试收集器：开始记录任务 ──
+        ★ 即时停止收口（自研架构）：
+        abort_main() 注入的 CancelledError 可能中断任意深度的 await
+        （API 流 / 工具执行 / 用户输入等待），无论从哪一层展开，
+        最终都在此统一捕获并返回 "stopped"，同时向事件队列发出
+        终止信号，前端轮询立即结束，不留悬挂事件。
+        """
         try:
-            self._debug_logger = get_debug_logger(self.app_dir)
-            self._debug_logger.start_task(
-                task_id=getattr(self.executor, "task_id", ""),
-                user_message=user_message,
-                project_root=self.project_root,
-            )
-            self._debug_logger.update_tokens(self._total_usage)
-            self._debug_logger.update_event_queue_size(self.event_queue.size)
-        except Exception:
-            self._debug_logger = None
-
-        # 记录事件循环引用，供 stop() 线程安全调度
-        self._agent_loop = asyncio.get_running_loop()
-
-        # 生命周期：创建任务
-        self._task_lifecycle = self.lifecycle_manager.create_task(
-            task_id=f"agent_{id(self)}_{int(time.time())}",
-            timeout=self.task_timeout,
-        )
-        self.lifecycle_manager.start_task(self._task_lifecycle.task_id)
-
-        try:
-            if self._use_responses_api:
-                result = await self._run_responses(user_message, history)
-            elif self._use_anthropic_search:
-                result = await self._run_anthropic(user_message, history)
-            else:
-                result = await self._run_openai(user_message, history)
-        except asyncio.CancelledError:
+            result = await self._run_impl(user_message, history, memory_content)
+        except nasync_io.CancelledError:
+            # 用户即时停止：取消注入中断当前 await，统一收口
+            self.event_queue.put("E:Task stopped by user")
+            self.event_queue.signal_finish()
             result = "stopped"
         except Exception as e:
             result = f"__ERROR__:{str(e)}"
         finally:
-            # 生命周期：标记任务完成
+            # 生命周期：标记任务完成（正常/异常/取消均走此路径）
             if self._task_lifecycle:
-                self.lifecycle_manager.stop_task(
-                    self._task_lifecycle.task_id, reason="completed"
-                )
+                try:
+                    self.lifecycle_manager.stop_task(
+                        self._task_lifecycle.task_id, reason="completed"
+                    )
+                except Exception:
+                    pass
 
+        # ── 以下为纯同步收尾（无 await，不会被取消中断）──
         # 构建对话历史
         conv = []
         for m in self._messages[2:]:
@@ -689,6 +758,61 @@ class AsyncAgentLoop:
             pass
 
         return result
+
+    async def _run_impl(self, user_message: str,
+                        history: Optional[List[Dict]] = None,
+                        memory_content: str = "") -> str:
+        """run() 的实际执行体：状态初始化 + 三条 API 路径分派。
+
+        注意：本方法内部不再捕获 CancelledError——取消统一由 run()
+        收口。即使取消发生在初始化阶段（run 启动瞬间用户点击停止），
+        CancelledError 也会穿透本方法回到 run() 处理。
+        """
+        self._step_count = 0
+        self._last_usage = None
+        self._total_usage = {"input_tokens": 0, "output_tokens": 0, "tool_call_tokens": 0}
+        self._messages = []
+        self._memory_content = memory_content
+
+        self._task_start_time = time.time()
+        self._total_pause_duration = 0.0
+        self._pause_start_time = 0.0
+
+        # ★ 停止竞态修复：stop() 可能先于本协程启动（用户极快点击停止）。
+        # 此时 stop_event 已被置位，若照常 clear() 会吞掉停止请求，
+        # 导致任务在已停止状态下继续运行。_stop_requested 标记保证
+        # 已置位的停止事件不被清掉，首个循环检查即退出。
+        if not self._stop_requested:
+            self._stop_event.clear()
+
+        # ── 调试收集器：开始记录任务 ──
+        try:
+            self._debug_logger = get_debug_logger(self.app_dir)
+            self._debug_logger.start_task(
+                task_id=getattr(self.executor, "task_id", ""),
+                user_message=user_message,
+                project_root=self.project_root,
+            )
+            self._debug_logger.update_tokens(self._total_usage)
+            self._debug_logger.update_event_queue_size(self.event_queue.size)
+        except Exception:
+            self._debug_logger = None
+
+        # 记录事件循环引用，供 stop() 线程安全调度
+        self._agent_loop = nasync_io.get_running_loop()
+
+        # 生命周期：创建任务
+        self._task_lifecycle = self.lifecycle_manager.create_task(
+            task_id=f"agent_{id(self)}_{int(time.time())}",
+            timeout=self.task_timeout,
+        )
+        self.lifecycle_manager.start_task(self._task_lifecycle.task_id)
+
+        if self._use_responses_api:
+            return await self._run_responses(user_message, history)
+        elif self._use_anthropic_search:
+            return await self._run_anthropic(user_message, history)
+        return await self._run_openai(user_message, history)
 
     # ═══════════════════════════════════════════════════════════════
     #  API 调用（在线程池中执行同步 OpenAI SDK）
@@ -849,7 +973,7 @@ class AsyncAgentLoop:
             api_params["temperature"] = self.temperature
 
         # 在线程池中运行同步流式调用
-        loop = asyncio.get_running_loop()
+        loop = nasync_io.get_running_loop()
 
         def _sync_stream():
             reasoning_parts = []
@@ -935,14 +1059,14 @@ class AsyncAgentLoop:
                 "usage": stream_usage,
             }
 
-        # ★ 僵尸进程防护：asyncio.wait_for 硬超时
+        # ★ 僵尸进程防护：nasync_io.wait_for 硬超时
         # 即使线程池中的同步函数阻塞（网络挂起），事件循环也不会永久等待
         try:
-            return await asyncio.wait_for(
+            return await nasync_io.wait_for(
                 loop.run_in_executor(None, _sync_stream),
                 timeout=self.api_request_timeout,
             )
-        except asyncio.TimeoutError:
+        except nasync_io.TimeoutError:
             self.event_queue.put(f"E:API request timeout ({format_api_timeout(self.api_request_timeout)}) — network may be unreachable")
             self._stop_event.set()
             return {
@@ -983,15 +1107,15 @@ class AsyncAgentLoop:
             plugin_tools = self.plugin_manager.get_tools()
             plugin_names = {t["function"]["name"] for t in plugin_tools}
             if tool_name in plugin_names:
-                loop = asyncio.get_running_loop()
+                loop = nasync_io.get_running_loop()
                 try:
-                    return await asyncio.wait_for(
+                    return await nasync_io.wait_for(
                         loop.run_in_executor(
                             None, self.plugin_manager.execute, tool_name, tool_args
                         ),
                         timeout=self.PLUGIN_TOOL_TIMEOUT,
                     )
-                except asyncio.TimeoutError:
+                except nasync_io.TimeoutError:
                     return (
                         f"Error: plugin tool '{tool_name}' timed out "
                         f"after {self.PLUGIN_TOOL_TIMEOUT:.0f}s"
@@ -1063,6 +1187,11 @@ class AsyncAgentLoop:
                 is_plugin = plugin_has_tool(self.plugin_manager, tool_name)
                 needs_approval, _approval_level = self.approval.requires_approval(
                     tool_name, is_plugin=is_plugin)
+                # ★ 视觉 delegate 让渡：用户已通过 vision_delegate 主动预授权，
+                #   覆盖范围内的视觉工具调用跳过审批弹窗（让渡即免逐次确认）。
+                if needs_approval and is_plugin and \
+                        self._vision_delegate_covers(tool_name, tool_args):
+                    needs_approval = False
                 if needs_approval:
                     if not await self._confirm_write_delete(tool_name, tool_args, is_plugin=is_plugin):
                         if self._stop_event.is_set():
@@ -1250,7 +1379,7 @@ class AsyncAgentLoop:
 
     async def _call_responses_stream(self, api_params: dict) -> Optional[dict]:
         """在线程池中调用 Responses API 流式。"""
-        loop = asyncio.get_running_loop()
+        loop = nasync_io.get_running_loop()
 
         def _sync_responses():
             reasoning_parts = []
@@ -1343,11 +1472,11 @@ class AsyncAgentLoop:
             }
 
         try:
-            return await asyncio.wait_for(
+            return await nasync_io.wait_for(
                 loop.run_in_executor(None, _sync_responses),
                 timeout=self.api_request_timeout,
             )
-        except asyncio.TimeoutError:
+        except nasync_io.TimeoutError:
             self.event_queue.put(f"E:Responses API request timeout ({format_api_timeout(self.api_request_timeout)}) — network may be unreachable")
             self._stop_event.set()
             return {
@@ -1527,6 +1656,11 @@ class AsyncAgentLoop:
                     is_plugin = plugin_has_tool(self.plugin_manager, tool_name)
                     needs_approval, _approval_level = self.approval.requires_approval(
                         tool_name, is_plugin=is_plugin)
+                    # ★ 视觉 delegate 让渡：用户已通过 vision_delegate 主动预授权，
+                    #   覆盖范围内的视觉工具调用跳过审批弹窗（让渡即免逐次确认）。
+                    if needs_approval and is_plugin and \
+                            self._vision_delegate_covers(tool_name, tool_input):
+                        needs_approval = False
                     if needs_approval:
                         if not await self._confirm_write_delete(tool_name, tool_input, is_plugin=is_plugin):
                             if self._stop_event.is_set():
@@ -1578,7 +1712,7 @@ class AsyncAgentLoop:
                                            tools: list, thinking=None,
                                            output_config=None) -> Optional[dict]:
         """在线程池中调用 Anthropic 流式 API。"""
-        loop = asyncio.get_running_loop()
+        loop = nasync_io.get_running_loop()
 
         def _sync_anthropic():
             reasoning_parts = []
@@ -1681,11 +1815,11 @@ class AsyncAgentLoop:
             }
 
         try:
-            return await asyncio.wait_for(
+            return await nasync_io.wait_for(
                 loop.run_in_executor(None, _sync_anthropic),
                 timeout=self.api_request_timeout,
             )
-        except asyncio.TimeoutError:
+        except nasync_io.TimeoutError:
             self.event_queue.put(f"E:Anthropic API request timeout ({format_api_timeout(self.api_request_timeout)}) — network may be unreachable")
             self._stop_event.set()
             return {

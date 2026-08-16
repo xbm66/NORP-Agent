@@ -89,20 +89,29 @@ def capture_window_bmp(hwnd: int, timeout: float = 10.0) -> bytes:
             pass
 
 
+def bmp_to_capture_result(bmp_bytes: bytes, hwnd: int) -> CaptureResult:
+    """把 capture_worker 产出的 BMP 字节转成 CaptureResult（PNG + 物理尺寸）。
+
+    单帧模式与驻留模式共用此转换（避免两处重复 BMP→PNG 逻辑）。
+    """
+    try:
+        img = Image.open(io.BytesIO(bmp_bytes))
+        width, height = img.size
+        png_buf = io.BytesIO()
+        img.save(png_buf, format="PNG")
+        return CaptureResult(png=png_buf.getvalue(), width=width,
+                             height=height, hwnd=int(hwnd))
+    except Exception as e:
+        raise VisionCaptureError(f"BMP 转 PNG 失败：{e}") from e
+
+
 def capture_window(hwnd: int, timeout: float = 10.0) -> CaptureResult:
     """捕获窗口一帧，返回 PNG 字节 + 物理尺寸。
 
     这是「看见画面」的主入口。返回的 png 可直接喂给 vision.process_visual。
     """
     bmp_bytes = capture_window_bmp(hwnd, timeout=timeout)
-    try:
-        img = Image.open(io.BytesIO(bmp_bytes))
-        width, height = img.size
-        png_buf = io.BytesIO()
-        img.save(png_buf, format="PNG")
-        return CaptureResult(png=png_buf.getvalue(), width=width, height=height, hwnd=int(hwnd))
-    except Exception as e:
-        raise VisionCaptureError(f"BMP 转 PNG 失败：{e}") from e
+    return bmp_to_capture_result(bmp_bytes, hwnd)
 
 
 def describe_window(
@@ -127,6 +136,44 @@ def describe_window(
             "（用「左上/右上/中部/底部」等描述）。如果能看到文字，请一并读出。"
         )
     return process_visual(captured.png, "png", config)
+
+
+def list_capturable_windows(max_results: int = 50) -> list:
+    """枚举当前桌面上的可见顶层窗口（hwnd + 标题），供「选择目标窗口」用。
+
+    纯 ctypes 调 Win32 EnumWindows（自研绑定，零外部库）。
+    只返回有标题的可见窗口（无标题的工具窗口/托盘窗口无法给用户辨认，过滤）。
+    返回格式：[{"hwnd": int, "title": str}]，按标题排序。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    found = []
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.wintypes.BOOL,
+        wintypes.HWND,
+        wintypes.LPARAM,
+    )
+
+    def _cb(hwnd, _lparam):
+        try:
+            if user32.IsWindowVisible(hwnd):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buf, length + 1)
+                    found.append({"hwnd": int(hwnd), "title": buf.value})
+        except Exception:
+            pass
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(_cb), 0)
+    found.sort(key=lambda e: e["title"].lower())
+    if len(found) > max_results:
+        found = found[:max_results]
+    return found
 
 
 class FrameSource:

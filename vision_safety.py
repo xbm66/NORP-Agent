@@ -252,6 +252,19 @@ class SafetyArbiter:
         if self._agent_operating:
             self._override_active = True
 
+    def touch_presence(self, last_input_ts: Optional[float] = None) -> None:
+        """刷新「用户最后键鼠活动时间」（不触发 override）。
+
+        供插件宿主等没有输入事件源的运行环境使用：上层周期读取系统
+        空闲时长（如 GetLastInputInfo），用本方法把「用户最后活动时刻」
+        喂给在场检测。与 notify_user_input 的区别：本方法绝不触发
+        override 接管（那需要真实的用户输入事件）。
+        """
+        ts = self._clock() if last_input_ts is None else float(last_input_ts)
+        # 只在「新时间戳更新」时刷新，避免时钟抖动把在场时间拉回过去
+        if ts > self._last_user_input_ts:
+            self._last_user_input_ts = ts
+
     def resume_from_override(self) -> None:
         """用户明确指示恢复，Agent 从挂起中恢复。"""
         self._override_active = False
@@ -320,5 +333,107 @@ class SafetyArbiter:
     def override_active(self) -> bool:
         return self._override_active
 
+    @property
+    def agent_operating(self) -> bool:
+        """Agent 是否正在执行操作序列（横幅「操作中」状态用）。"""
+        return self._agent_operating
+
+    @property
+    def idle_locked(self) -> bool:
+        """在场检测：用户空闲超时且未开启 idle_allow_operate（锁死中）。"""
+        return self._idle_locked()
+
     def audit_log(self) -> List[AuditRecord]:
         return list(self._audit)
+
+    # ═══════════════════════════════════════════════════════════
+    #  状态持久化（自研 JSON 序列化，零外部依赖）
+    # ═══════════════════════════════════════════════════════════
+    #
+    # 用途：裁决器可能运行在插件宿主子进程里，宿主空闲超时会退出重启。
+    # 熔断 / 失败收敛 / delegate 是安全状态，**绝不能随进程重启而清零**。
+    # 因此上层（插件 / 服务宿主）应在每次执行前后调用 import_state /
+    # export_state，把状态落到磁盘（原子写），重启后恢复。
+    #
+    # 注意：审计日志（audit_log）属于主架构审计通道，不在此处持久化，
+    # 以免状态文件无限膨胀；若需持久审计请由上层单独落盘。
+
+    def export_state(self) -> dict:
+        """导出全部安全状态（熔断机 / 控制权 / 失败收敛 / 时间戳）。
+
+        仅含 JSON 可序列化字段，可直接 json.dump。
+        """
+        delegate = None
+        if self._delegate:
+            delegate = dict(self._delegate)
+        return {
+            "version": 1,
+            "circuit": self._circuit.value,
+            "consecutive_vetoes": int(self._consecutive_vetoes),
+            "circuit_opened_at": self._circuit_opened_at,
+            "half_open_trial_done": bool(self._half_open_trial_done),
+            "override_active": bool(self._override_active),
+            "agent_operating": bool(self._agent_operating),
+            "delegate": delegate,
+            "last_veto_at": self._last_veto_at,
+            "last_user_input_ts": self._last_user_input_ts,
+            "failure_counts": {
+                str(k): int(v) for k, v in self._failure_counts.items()
+            },
+            "exported_at": self._clock(),
+        }
+
+    def import_state(self, state: dict) -> None:
+        """从 export_state() 的输出恢复状态。
+
+        规则：
+          - 缺失 / 非法字段保持当前值不变（向前兼容、防文件损坏）。
+          - version 不匹配时拒绝导入（避免旧格式误恢复）。
+          - 「更保守」优先：无法判定的字段一律按更安全的方向处理。
+        """
+        if not isinstance(state, dict):
+            return
+        if state.get("version") != 1:
+            return  # 未知版本，拒绝导入（保持现状，不猜）
+
+        # ── 熔断机（导入时若时钟异常导致冷却无限延长，下次裁决仍走 OPEN 拒绝，安全） ──
+        if state.get("circuit") in ("CLOSED", "OPEN", "HALF_OPEN"):
+            self._circuit = CircuitState(state["circuit"])
+        if isinstance(state.get("consecutive_vetoes"), int) and state["consecutive_vetoes"] >= 0:
+            self._consecutive_vetoes = state["consecutive_vetoes"]
+        if isinstance(state.get("circuit_opened_at"), (int, float)):
+            self._circuit_opened_at = float(state["circuit_opened_at"])
+        if isinstance(state.get("half_open_trial_done"), bool):
+            self._half_open_trial_done = state["half_open_trial_done"]
+
+        # ── 控制权 / 确认权 ──
+        if isinstance(state.get("override_active"), bool):
+            # override 恢复为 True 时保留（用户接管状态不丢）；
+            # 恢复为 False 且当前为 True 时也保留（宁可保守挂起）。
+            if state["override_active"] or self._override_active:
+                self._override_active = True
+        if isinstance(state.get("agent_operating"), bool):
+            # 进程重启后不可能还在「操作中」，强制复位
+            self._agent_operating = False
+        d = state.get("delegate")
+        if isinstance(d, dict):
+            self._delegate = {
+                "scope": str(d.get("scope", "window")),
+                "max_risk": str(d.get("max_risk", "L2")),
+                "target_window": d.get("target_window"),
+                "expires_at": float(d.get("expires_at", 0.0)),
+            }
+        if isinstance(state.get("last_veto_at"), (int, float)):
+            self._last_veto_at = float(state["last_veto_at"])
+        if isinstance(state.get("last_user_input_ts"), (int, float)):
+            # 导入旧时间戳意味着「用户很久没动」→ 更倾向锁死，安全方向正确
+            self._last_user_input_ts = float(state["last_user_input_ts"])
+
+        # ── 失败收敛 ──
+        fc = state.get("failure_counts")
+        if isinstance(fc, dict):
+            restored = {}
+            for k, v in fc.items():
+                if isinstance(k, str) and isinstance(v, int) and v >= 0:
+                    restored[k] = v
+            self._failure_counts = restored

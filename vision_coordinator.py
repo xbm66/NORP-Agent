@@ -152,6 +152,9 @@ class SendInputExecutor:
         if op == "click":
             sx, sy = self._img_to_screen(p, before, va)
             va.click(sx, sy, button=p.get("button", "left"))
+        elif op == "double_click":
+            sx, sy = self._img_to_screen(p, before, va)
+            va.double_click(sx, sy, button=p.get("button", "left"))
         elif op == "move":
             sx, sy = self._img_to_screen(p, before, va)
             va.move_mouse(sx, sy)
@@ -235,6 +238,44 @@ class PixelDiffVerifier:
         )
 
 
+class CursorPosVerifier:
+    """光标位置验证器：比对「动作后」鼠标实际位置与预期屏幕坐标。
+
+    用于 move 这类「不改变画面内容」的操作——像素比对会因画面无变化
+    而误判失败。本验证器全程 L0 只读（GetCursorPos），零物理副作用。
+    坐标换算复刻 SendInputExecutor._img_to_screen 的同一公式，
+    容差默认 ±5 物理像素（发送延迟/取整误差内）。
+    """
+
+    def __init__(self, *, tolerance: int = 5):
+        self.tolerance = int(tolerance)
+
+    def verify(self, spec: ActionSpec, before, after) -> VerificationResult:
+        import vision_actions as va
+
+        p = spec.payload or {}
+        x = float(p.get("x", 0.0))
+        y = float(p.get("y", 0.0))
+        img_w = int(p.get("img_w", before.width))
+        img_h = int(p.get("img_h", before.height))
+        hwnd = int(getattr(before, "hwnd", 0) or 0)
+        expected = va.image_to_screen(
+            hwnd, x, y,
+            img_w, img_h, before.width, before.height,
+        )
+        actual = va.get_cursor_pos()
+        dx, dy = actual[0] - expected[0], actual[1] - expected[1]
+        ok = abs(dx) <= self.tolerance and abs(dy) <= self.tolerance
+        return VerificationResult(
+            success=ok,
+            confidence=1.0 if ok else 0.0,
+            detail=(
+                f"光标预期 {expected}，实际 {actual}，偏差 ({dx},{dy})"
+                f"（容差 ±{self.tolerance}）"
+            ),
+        )
+
+
 class VisionModelVerifier:
     """语义验证器：把「动作后」帧交给视觉模型，问「预期变化是否已发生」。
 
@@ -311,15 +352,25 @@ class VisionCoordinator:
         capture_fn: Optional[Callable[[int], Any]] = None,
         confirm_fn: Optional[Callable[[ActionSpec, Any], bool]] = None,
         settle_delay: float = 0.3,
+        frame_source: bool = False,
     ):
         self.hwnd = int(hwnd)
         self.config = config or {}
         self._arbiter = arbiter or SafetyArbiter()
         self._executor = executor if executor is not None else SendInputExecutor(self.hwnd)
         self._verifier = verifier if verifier is not None else PixelDiffVerifier()
-        self._capture_fn = capture_fn or _default_capture
         self._confirm_fn = confirm_fn
         self._settle_delay = settle_delay
+        # ── 捕获器：frame_source=True 时用 capture_worker 驻留模式（高频循环），
+        #    否则用注入的 capture_fn 或默认单帧冷启动。驻留模式实例由本对象
+        #    管理生命周期（close() 释放 capture_worker 进程）。
+        self._frame_source: Optional[FrameSourceCapture] = None
+        if frame_source:
+            self._frame_source = FrameSourceCapture(self.hwnd)
+            self._frame_source.start()
+            self._capture_fn = self._frame_source.capture
+        else:
+            self._capture_fn = capture_fn or _default_capture
 
     # ── 只读访问 ──
 
@@ -329,6 +380,19 @@ class VisionCoordinator:
 
     def audit_log(self):
         return self._arbiter.audit_log()
+
+    def close(self) -> None:
+        """释放驻留捕获资源（frame_source=True 时务必调用）。"""
+        if self._frame_source is not None:
+            self._frame_source.close()
+            self._frame_source = None
+
+    def __enter__(self) -> "VisionCoordinator":
+        return self
+
+    def __exit__(self, *args) -> bool:
+        self.close()
+        return False
 
     # ── 核心：动作-验证-收敛 ──
 
@@ -435,3 +499,61 @@ def _default_capture(hwnd: int):
     """默认捕获：单帧冷启动 capture_worker（稳健；高频循环可注入 FrameSource 版）。"""
     from vision_capture import capture_window
     return capture_window(hwnd)
+
+
+class FrameSourceCapture:
+    """capture_worker 驻留模式（--serve）捕获器：协调器高频循环用。
+
+    相比 _default_capture 每次冷启动进程，驻留模式只启动一次
+    capture_worker，之后每帧只需「shot 命令 + 读长度 + 读数据」，
+    「动作-验证-收敛」里 before/after 两次重捕获的延迟显著下降。
+
+    用法：
+        fs = FrameSourceCapture(hwnd)
+        fs.start()
+        coord = VisionCoordinator(hwnd=..., capture_fn=fs.capture, ...)
+        ...
+        fs.close()
+
+    注意：驻留进程持续占用 capture_worker（约一个 D3D11 会话），
+    不再使用时务必 close()；也可用 with 语句管理生命周期。
+    """
+
+    def __init__(self, hwnd: int, ready_timeout: float = 10.0):
+        self.hwnd = int(hwnd)
+        self.ready_timeout = ready_timeout
+        self._source = None
+
+    @property
+    def active(self) -> bool:
+        return self._source is not None
+
+    def start(self) -> None:
+        if self._source is not None:
+            return
+        from vision_capture import FrameSource
+        self._source = FrameSource(self.hwnd, ready_timeout=self.ready_timeout)
+        self._source.start()
+
+    def capture(self, hwnd: int):
+        """取最新一帧，返回与 capture_window 相同形状的 CaptureResult。"""
+        if self._source is None:
+            raise CoordinatorError("FrameSource 未启动（先调用 start()）")
+        from vision_capture import bmp_to_capture_result
+        bmp = self._source.shot_ready()
+        return bmp_to_capture_result(bmp, hwnd)
+
+    def close(self) -> None:
+        if self._source is not None:
+            try:
+                self._source.close()
+            finally:
+                self._source = None
+
+    def __enter__(self) -> "FrameSourceCapture":
+        self.start()
+        return self
+
+    def __exit__(self, *args) -> bool:
+        self.close()
+        return False

@@ -1873,56 +1873,6 @@ body {
 #loading-overlay.error .loading-progress {
     display: none;
 }
-
-/* ── SSH 远程运维面板 ── */
-.ssh-tabs {
-    display: flex;
-    gap: 6px;
-    margin: 12px 0;
-    flex-wrap: wrap;
-    border-bottom: 1px solid #333;
-    padding-bottom: 8px;
-}
-.ssh-tab {
-    padding: 6px 14px;
-    font-size: 13px;
-    border: 1px solid #444;
-    background: transparent;
-    color: #bbb;
-    border-radius: 6px;
-    cursor: pointer;
-}
-.ssh-tab:hover {
-    background: #2a2a2a;
-    color: #fff;
-}
-.ssh-tab.active {
-    background: #007aff;
-    border-color: #007aff;
-    color: #fff;
-}
-.ssh-panel {
-    padding: 4px 2px;
-}
-.ssh-host-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-}
-.ssh-host-table th, .ssh-host-table td {
-    text-align: left;
-    padding: 6px 8px;
-    border-bottom: 1px solid #2a2a2a;
-    vertical-align: middle;
-}
-.ssh-host-table th {
-    color: #888;
-    font-weight: 600;
-    font-size: 12px;
-}
-.ssh-host-table tr:hover td {
-    background: #1e1e1e;
-}
 </style>
 </head>
 <body>
@@ -2128,8 +2078,6 @@ body {
         <button id="about-btn" data-i18n="about">About</button>
         <button id="balance-btn" data-i18n="balance">Balance</button>
         <button id="key-btn" data-i18n="key">Key</button>
-        <button id="ssh-btn" data-i18n="ssh">🔌 SSH</button>
-        <button id="remote-btn">📱 移动端</button>
         <button id="settings-btn" data-i18n="settings">Settings</button>
         <button id="stop-btn" class="btn-stop" data-i18n="stop">Stop</button>
     </div>
@@ -2427,6 +2375,36 @@ body {
             </div>
             <div class="checkbox-desc" data-i18n="vision_enable_desc">开启后，上传的图片/视频将交给视觉层处理。多模态视觉模型由开发者自行接入。</div>
             <div id="vision-config" style="display:none;margin-top:8px;">
+                <label style="font-size:12px;" data-i18n="vision_provider_label">视觉 Provider（内置适配器，可选）</label>
+                <select id="cfg-vision-provider" style="width:100%;margin-top:4px;">
+                    <option value="" data-i18n="vision_provider_none">不使用内置 provider（仅本地回调 / 外部服务）</option>
+                    <option value="openai_compatible">openai_compatible（OpenAI / Qwen-VL / Ollama / vLLM）</option>
+                    <option value="anthropic">anthropic（Claude）</option>
+                    <option value="llama_cpp">llama_cpp（本地 raw completion）</option>
+                </select>
+                <div class="checkbox-desc" data-i18n="vision_provider_desc">内置 provider 优先级最高，失败时自动降级到本地回调 / 外部服务。</div>
+                <label style="font-size:12px;" data-i18n="vision_model_label">模型名</label>
+                <input type="text" id="cfg-vision-model" data-i18n-placeholder="vision_model_placeholder" placeholder="如 gpt-4o / qwen-vl-max / claude-3-5-sonnet" style="width:100%;margin-top:4px;">
+                <label style="font-size:12px;" data-i18n="vision_api_key_label">API Key</label>
+                <input type="password" id="cfg-vision-api-key" data-i18n-placeholder="vision_api_key_placeholder" placeholder="云端 provider 必填；本地 llama.cpp / Ollama 可留空" style="width:100%;margin-top:4px;">
+                <label style="font-size:12px;" data-i18n="vision_base_url_label">Base URL</label>
+                <input type="text" id="cfg-vision-base-url" data-i18n-placeholder="vision_base_url_placeholder" placeholder="如 http://127.0.0.1:8080/v1" style="width:100%;margin-top:4px;">
+                <div class="flex-row" style="margin-top:6px;">
+                    <div style="flex:1;margin-right:6px;">
+                        <label style="font-size:12px;" data-i18n="vision_max_tokens_label">最大输出 token</label>
+                        <input type="number" id="cfg-vision-max-tokens" min="16" max="8192" style="width:100%;margin-top:4px;">
+                    </div>
+                    <div style="flex:1;margin-right:6px;">
+                        <label style="font-size:12px;" data-i18n="vision_temperature_label">温度</label>
+                        <input type="number" id="cfg-vision-temperature" min="0" max="2" step="0.1" style="width:100%;margin-top:4px;">
+                    </div>
+                    <div style="flex:1;">
+                        <label style="font-size:12px;" data-i18n="vision_timeout_label">请求超时（秒）</label>
+                        <input type="number" id="cfg-vision-timeout" min="5" max="3600" style="width:100%;margin-top:4px;">
+                    </div>
+                </div>
+                <label style="font-size:12px;" data-i18n="vision_prompt_label">默认视觉指令 prompt</label>
+                <textarea id="cfg-vision-prompt" rows="2" data-i18n-placeholder="vision_prompt_placeholder" placeholder="留空 = 用内置默认「请详细描述图片内容」" style="width:100%;margin-top:4px;resize:vertical;"></textarea>
                 <label style="font-size:12px;" data-i18n="vision_service_url_label">外部视觉服务地址（可选）</label>
                 <input type="text" id="cfg-vision-service-url" data-i18n-placeholder="vision_service_url_placeholder" placeholder="https://your-vision-service.example.com/process" style="width:100%;margin-top:4px;">
                 <div class="checkbox-desc" data-i18n="vision_service_url_desc">留空则仅使用本地注册的回调（register_vision_handler）。服务按 POST JSON 协议接收图片/视频，返回文字描述。</div>
@@ -2434,19 +2412,58 @@ body {
         </div>
         <!-- end 视觉 API -->
 
-        <!-- 移动端远程控制 -->
-        <h3 style="margin-top:12px;">📱 移动端远程控制</h3>
-        <div style="margin-bottom:8px;">
-            <div class="checkbox-row">
-                <input type="checkbox" id="cfg-remote-enabled">
-                <label for="cfg-remote-enabled">启用远程访问（重启生效）</label>
+        <!-- 视觉操作安全（外挂裁决器） -->
+        <h3 style="margin-top:12px;" data-i18n="vision_safety_section">🛡️ 视觉操作安全（外挂裁决器）</h3>
+        <div id="vision-safety-section" style="margin-bottom:8px;">
+            <div class="checkbox-desc" data-i18n="vision_safety_desc">视觉外挂（vision_click / vision_type 等 L2 操作）的安全阈值。L2 操作必须经审批弹窗用户显式确认。</div>
+            <div class="flex-row" style="margin-top:8px;">
+                <div style="flex:1;margin-right:6px;">
+                    <label style="font-size:12px;" data-i18n="vision_idle_timeout_label">用户空闲判定阈值（秒）</label>
+                    <input type="number" id="cfg-vision-idle-timeout" min="10" max="3600" style="width:100%;margin-top:4px;">
+                </div>
+                <div style="flex:1;margin-right:6px;">
+                    <label style="font-size:12px;" data-i18n="vision_delegate_window_label">delegate 让渡时长（秒）</label>
+                    <input type="number" id="cfg-vision-delegate-window" min="10" max="86400" style="width:100%;margin-top:4px;">
+                </div>
+                <div style="flex:1;">
+                    <label style="font-size:12px;" data-i18n="vision_cooldown_label">熔断冷却（秒）</label>
+                    <input type="number" id="cfg-vision-cooldown" min="5" max="3600" style="width:100%;margin-top:4px;">
+                </div>
             </div>
-            <label>绑定地址（0.0.0.0 = 允许局域网访问）</label>
-            <input type="text" id="cfg-remote-host" placeholder="127.0.0.1">
-            <label>端口</label>
-            <input type="number" id="cfg-remote-port" min="1" max="65535" value="8090">
-            <div class="checkbox-desc">默认 127.0.0.1 仅本机可访问（手机连不上）。改成 0.0.0.0 并重启后，手机可通过局域网扫码/链接访问。⚠️ 暴露到局域网 = 同网段设备可控制你的 Agent。</div>
+            <div class="flex-row" style="margin-top:6px;">
+                <div style="flex:1;margin-right:6px;">
+                    <label style="font-size:12px;" data-i18n="vision_delegate_scope_label">让渡范围</label>
+                    <select id="cfg-vision-delegate-scope" style="width:100%;margin-top:4px;">
+                        <option value="window">window（仅指定窗口）</option>
+                        <option value="app">app（同应用）</option>
+                        <option value="session">session（本次会话）</option>
+                    </select>
+                </div>
+                <div style="flex:1;margin-right:6px;">
+                    <label style="font-size:12px;" data-i18n="vision_delegate_max_risk_label">让渡最高风险级</label>
+                    <select id="cfg-vision-delegate-max-risk" style="width:100%;margin-top:4px;">
+                        <option value="L0">L0（只读）</option>
+                        <option value="L1">L1（无副作用）</option>
+                        <option value="L2">L2（有副作用）</option>
+                    </select>
+                </div>
+                <div style="flex:1;">
+                    <label style="font-size:12px;" data-i18n="vision_max_failures_label">连续失败停手次数</label>
+                    <input type="number" id="cfg-vision-max-failures" min="1" max="10" style="width:100%;margin-top:4px;">
+                </div>
+            </div>
+            <div class="checkbox-row" style="margin-top:8px;">
+                <input type="checkbox" id="cfg-vision-idle-allow-operate">
+                <label for="cfg-vision-idle-allow-operate" data-i18n="vision_idle_allow_operate">空闲后允许 Agent 继续操作</label>
+            </div>
+            <div class="checkbox-desc" data-i18n="vision_idle_allow_operate_desc">默认关闭：用户离开即锁死，只保留 L0 只读。开启后用户离开时 Agent 仍可操作电脑（风险自担）。</div>
+            <div class="checkbox-row" style="margin-top:8px;">
+                <input type="checkbox" id="cfg-vision-framesource">
+                <label for="cfg-vision-framesource" data-i18n="vision_use_framesource">启用 capture_worker 驻留捕获（动作-验证高频循环更快）</label>
+            </div>
+            <div class="checkbox-desc" data-i18n="vision_use_framesource_desc">默认关闭（每次冷启动捕获进程，最稳）。开启后捕获进程常驻复用，点击/输入后的重捕获验证延迟更低，但会持续占用一个 D3D11 捕获会话。</div>
         </div>
+        <!-- end 视觉操作安全 -->
 
         <!-- 🛠️ 调试入口 -->
         <div style="margin-top:16px;padding-top:12px;border-top:1px dashed #ccc;">
@@ -2462,133 +2479,6 @@ body {
                 <button class="btn-secondary" id="settings-cancel" data-i18n="cancel">Cancel</button>
                 <button class="btn-primary" id="settings-save-btn" data-i18n="save">Save</button>
             </div>
-        </div>
-    </div>
-</div>
-
-<div id="ssh-modal" class="modal">
-    <div class="modal-content" style="max-width:880px;">
-        <h2>🔌 SSH 远程运维</h2>
-        <div class="ssh-tabs">
-            <button class="ssh-tab active" data-tab="hosts">主机管理</button>
-            <button class="ssh-tab" data-tab="exec">执行命令</button>
-            <button class="ssh-tab" data-tab="transfer">文件传输</button>
-            <button class="ssh-tab" data-tab="tunnel">隧道</button>
-            <button class="ssh-tab" data-tab="cluster">集群</button>
-            <button class="ssh-tab" data-tab="terminal">终端</button>
-        </div>
-
-        <div class="ssh-panel" id="ssh-panel-hosts">
-            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
-                <input type="text" id="ssh-host-search" placeholder="搜索别名/主机/标签…" style="flex:1;">
-                <button class="btn-small" id="ssh-host-import">导入 ~/.ssh/config</button>
-                <button class="btn-small" id="ssh-host-refresh">刷新</button>
-            </div>
-            <div id="ssh-host-list" style="max-height:260px;overflow:auto;"></div>
-            <div style="margin-top:10px;border-top:1px solid #333;padding-top:10px;">
-                <div class="flex-row" style="gap:6px;flex-wrap:wrap;">
-                    <input type="text" id="ssh-f-alias" placeholder="别名*">
-                    <input type="text" id="ssh-f-host" placeholder="主机*">
-                    <input type="text" id="ssh-f-user" placeholder="用户">
-                    <input type="number" id="ssh-f-port" placeholder="端口" value="22" style="width:80px;">
-                    <select id="ssh-f-auth"><option value="key">密钥</option><option value="password">密码</option></select>
-                </div>
-                <div class="flex-row" style="gap:6px;flex-wrap:wrap;margin-top:6px;">
-                    <input type="text" id="ssh-f-identity" placeholder="私钥路径 ~/.ssh/id_rsa" style="flex:1;">
-                    <input type="password" id="ssh-f-password" placeholder="密码(密码认证时)">
-                    <input type="text" id="ssh-f-jump" placeholder="跳板机">
-                    <input type="text" id="ssh-f-tags" placeholder="标签(逗号分隔)">
-                </div>
-                <div class="btn-row" style="margin-top:8px;">
-                    <button class="btn-primary" id="ssh-host-add">添加 / 更新</button>
-                </div>
-            </div>
-        </div>
-
-        <div class="ssh-panel" id="ssh-panel-exec" style="display:none;">
-            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
-                <select id="ssh-exec-host" style="flex:1;"></select>
-                <input type="number" id="ssh-exec-timeout" value="60" style="width:80px;" title="超时秒数">
-            </div>
-            <textarea id="ssh-exec-cmd" placeholder="要执行的命令，如 df -h" style="width:100%;height:70px;"></textarea>
-            <div class="btn-row" style="margin-top:8px;">
-                <button class="btn-primary" id="ssh-exec-run">执行</button>
-            </div>
-            <pre id="ssh-exec-output" style="background:#0f1115;color:#d0d0d0;padding:10px;border-radius:8px;max-height:260px;overflow:auto;white-space:pre-wrap;font-size:12px;margin-top:8px;display:none;"></pre>
-        </div>
-
-        <div class="ssh-panel" id="ssh-panel-transfer" style="display:none;">
-            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
-                <select id="ssh-xfer-host" style="flex:1;"></select>
-            </div>
-            <div style="border:1px solid #333;border-radius:8px;padding:10px;margin-bottom:8px;">
-                <div style="font-size:12px;color:#888;margin-bottom:4px;">上传（本机 → 远程）</div>
-                <div class="flex-row" style="gap:6px;">
-                    <input type="text" id="ssh-up-local" placeholder="本地文件路径" style="flex:1;">
-                    <button class="btn-small" id="ssh-up-browse">浏览</button>
-                </div>
-                <input type="text" id="ssh-up-remote" placeholder="远程目标路径" style="width:100%;margin-top:6px;">
-                <div class="btn-row" style="margin-top:6px;"><button class="btn-primary" id="ssh-up-go">上传</button></div>
-            </div>
-            <div style="border:1px solid #333;border-radius:8px;padding:10px;">
-                <div style="font-size:12px;color:#888;margin-bottom:4px;">下载（远程 → 本机）</div>
-                <input type="text" id="ssh-down-remote" placeholder="远程文件路径" style="width:100%;">
-                <div class="flex-row" style="gap:6px;margin-top:6px;">
-                    <input type="text" id="ssh-down-local" placeholder="本地保存路径" style="flex:1;">
-                    <button class="btn-small" id="ssh-down-browse">浏览</button>
-                </div>
-                <div class="btn-row" style="margin-top:6px;"><button class="btn-primary" id="ssh-down-go">下载</button></div>
-            </div>
-        </div>
-
-        <div class="ssh-panel" id="ssh-panel-tunnel" style="display:none;">
-            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
-                <select id="ssh-tun-host" style="flex:1;"></select>
-                <input type="number" id="ssh-tun-remote-port" placeholder="远程端口" style="width:90px;">
-                <input type="text" id="ssh-tun-remote-host" placeholder="远程主机" value="127.0.0.1" style="width:120px;">
-                <button class="btn-primary" id="ssh-tun-start">开隧道</button>
-            </div>
-            <div class="btn-row" style="margin-bottom:8px;"><button class="btn-small btn-danger" id="ssh-tun-stop-all">关闭全部</button></div>
-            <div id="ssh-tun-list" style="max-height:220px;overflow:auto;"></div>
-        </div>
-
-        <div class="ssh-panel" id="ssh-panel-cluster" style="display:none;">
-            <textarea id="ssh-cl-cmd" placeholder="在每台主机执行的命令" style="width:100%;height:70px;"></textarea>
-            <div class="flex-row" style="gap:6px;margin-top:8px;flex-wrap:wrap;">
-                <input type="text" id="ssh-cl-aliases" placeholder="别名(逗号,留空=全部)" style="flex:1;">
-                <input type="text" id="ssh-cl-tags" placeholder="标签(逗号)" style="width:130px;">
-                <input type="text" id="ssh-cl-env" placeholder="环境" style="width:100px;">
-                <button class="btn-primary" id="ssh-cl-run">批量执行</button>
-            </div>
-            <div id="ssh-cl-result" style="max-height:260px;overflow:auto;margin-top:8px;"></div>
-        </div>
-
-        <div class="ssh-panel" id="ssh-panel-terminal" style="display:none;">
-            <div class="flex-row" style="gap:6px;margin-bottom:8px;">
-                <select id="ssh-term-host" style="flex:1;"></select>
-                <button class="btn-primary" id="ssh-term-open">连接</button>
-                <button class="btn-danger" id="ssh-term-close">断开</button>
-            </div>
-            <div id="ssh-term-output" style="background:#0f1115;color:#d0d0d0;padding:10px;border-radius:8px;height:300px;overflow:auto;white-space:pre-wrap;font-family:Consolas,monospace;font-size:13px;">未连接</div>
-            <div class="flex-row" style="gap:6px;margin-top:8px;">
-                <input type="text" id="ssh-term-input" placeholder="输入命令，回车发送" style="flex:1;">
-                <button class="btn-small" id="ssh-term-send">发送</button>
-            </div>
-        </div>
-
-        <div class="btn-row" style="justify-content:flex-end;margin-top:12px;">
-            <button class="btn-secondary" id="ssh-close">关闭</button>
-        </div>
-    </div>
-</div>
-
-<div id="remote-modal" class="modal">
-    <div class="modal-content" style="max-width:460px;">
-        <h2>📱 移动端远程控制</h2>
-        <p style="font-size:12px;color:#888;margin-top:2px;">扫码或在手机上打开链接，即可远程控制当前工作区</p>
-        <div id="remote-body" style="margin:10px 0;"></div>
-        <div class="btn-row" style="justify-content:flex-end;">
-            <button class="btn-secondary" id="remote-close">关闭</button>
         </div>
     </div>
 </div>
@@ -3194,6 +3084,32 @@ var I18N = {
         "vision_service_url_placeholder": "https://your-vision-service.example.com/process",
         "vision_service_url_desc": "留空则仅使用本地注册的回调（register_vision_handler）。服务按 POST JSON 协议接收图片/视频，返回文字描述。",
         "vision_required_hint": "需要开启视觉 API 才能上传图片/视频文件",
+        "vision_provider_label": "视觉 Provider（内置适配器，可选）",
+        "vision_provider_none": "不使用内置 provider（仅本地回调 / 外部服务）",
+        "vision_provider_desc": "内置 provider 优先级最高：openai_compatible 兼容 OpenAI/Qwen-VL/Ollama/vLLM，anthropic 走 Claude，llama_cpp 走本地 raw completion（完全离线）。失败时自动降级到本地回调 / 外部服务。",
+        "vision_model_label": "模型名",
+        "vision_model_placeholder": "如 gpt-4o / qwen-vl-max / claude-3-5-sonnet",
+        "vision_api_key_label": "API Key",
+        "vision_api_key_placeholder": "云端 provider 必填；本地 llama.cpp / Ollama 可留空",
+        "vision_base_url_label": "Base URL",
+        "vision_base_url_placeholder": "如 http://127.0.0.1:8080/v1（本地 llama.cpp / Ollama / vLLM）",
+        "vision_max_tokens_label": "最大输出 token",
+        "vision_temperature_label": "温度",
+        "vision_timeout_label": "请求超时（秒）",
+        "vision_prompt_label": "默认视觉指令 prompt",
+        "vision_prompt_placeholder": "留空 = 用内置默认「请详细描述图片内容」",
+        "vision_safety_section": "🛡️ 视觉操作安全（外挂裁决器）",
+        "vision_safety_desc": "视觉外挂（vision_click / vision_type 等 L2 操作）的安全阈值：熔断冷却、空闲锁死、delegate 让渡、失败停手。L2 操作必须经审批弹窗用户显式确认。",
+        "vision_idle_timeout_label": "用户空闲判定阈值（秒）",
+        "vision_idle_allow_operate": "空闲后允许 Agent 继续操作",
+        "vision_idle_allow_operate_desc": "默认关闭：用户离开即锁死，只保留 L0 只读。开启后用户离开时 Agent 仍可操作电脑（风险自担）。",
+        "vision_delegate_window_label": "delegate 让渡时长（秒）",
+        "vision_delegate_scope_label": "让渡范围",
+        "vision_delegate_max_risk_label": "让渡最高风险级（L3 永不免确认）",
+        "vision_cooldown_label": "熔断冷却（秒）",
+        "vision_max_failures_label": "连续失败停手次数",
+        "vision_use_framesource": "启用 capture_worker 驻留捕获（动作-验证高频循环更快）",
+        "vision_use_framesource_desc": "默认关闭（每次冷启动捕获进程，最稳）。开启后捕获进程常驻复用，点击/输入后的重捕获验证延迟更低，但会持续占用一个 D3D11 捕获会话。",
     },
     "zh_TW": {
         "app_title": "NORP Agent",
@@ -3521,6 +3437,32 @@ var I18N = {
         "vision_service_url_placeholder": "https://your-vision-service.example.com/process",
         "vision_service_url_desc": "留空則僅使用本地註冊的回呼（register_vision_handler）。服務按 POST JSON 協定接收圖片/影片，返回文字描述。",
         "vision_required_hint": "需要開啟視覺 API 才能上傳圖片/影片檔案",
+        "vision_provider_label": "視覺 Provider（內建轉接器，可選）",
+        "vision_provider_none": "不使用內建 provider（僅本機回呼 / 外部服務）",
+        "vision_provider_desc": "內建 provider 優先權最高：openai_compatible 相容 OpenAI/Qwen-VL/Ollama/vLLM，anthropic 走 Claude，llama_cpp 走本機 raw completion（完全離線）。失敗時自動降級到本機回呼 / 外部服務。",
+        "vision_model_label": "模型名",
+        "vision_model_placeholder": "如 gpt-4o / qwen-vl-max / claude-3-5-sonnet",
+        "vision_api_key_label": "API Key",
+        "vision_api_key_placeholder": "雲端 provider 必填；本機 llama.cpp / Ollama 可留空",
+        "vision_base_url_label": "Base URL",
+        "vision_base_url_placeholder": "如 http://127.0.0.1:8080/v1（本機 llama.cpp / Ollama / vLLM）",
+        "vision_max_tokens_label": "最大輸出 token",
+        "vision_temperature_label": "溫度",
+        "vision_timeout_label": "請求逾時（秒）",
+        "vision_prompt_label": "預設視覺指令 prompt",
+        "vision_prompt_placeholder": "留空 = 用內建預設「請詳細描述圖片內容」",
+        "vision_safety_section": "🛡️ 視覺操作安全（外掛裁決器）",
+        "vision_safety_desc": "視覺外掛（vision_click / vision_type 等 L2 操作）的安全閾值：熔斷冷卻、閒置鎖死、delegate 讓渡、失敗停手。L2 操作必須經審批彈窗使用者顯式確認。",
+        "vision_idle_timeout_label": "使用者閒置判定閾值（秒）",
+        "vision_idle_allow_operate": "閒置後允許 Agent 繼續操作",
+        "vision_idle_allow_operate_desc": "預設關閉：使用者離開即鎖死，只保留 L0 唯讀。開啟後使用者離開時 Agent 仍可操作電腦（風險自擔）。",
+        "vision_delegate_window_label": "delegate 讓渡時長（秒）",
+        "vision_delegate_scope_label": "讓渡範圍",
+        "vision_delegate_max_risk_label": "讓渡最高風險級（L3 永不免確認）",
+        "vision_cooldown_label": "熔斷冷卻（秒）",
+        "vision_max_failures_label": "連續失敗停手次數",
+        "vision_use_framesource": "啟用 capture_worker 駐留擷取（動作-驗證高頻迴圈更快）",
+        "vision_use_framesource_desc": "預設關閉（每次冷啟動擷取程序，最穩）。開啟後擷取程序常駐複用，點擊/輸入後的重擷取驗證延遲更低，但會持續佔用一個 D3D11 擷取會話。",
     },
     "en": {
         "app_title": "NORP Agent",
@@ -3848,6 +3790,32 @@ var I18N = {
         "vision_service_url_placeholder": "https://your-vision-service.example.com/process",
         "vision_service_url_desc": "Leave empty to use only locally registered handlers (register_vision_handler). The service receives images/videos via POST JSON and returns a text description.",
         "vision_required_hint": "Enable Vision API to upload image/video files",
+        "vision_provider_label": "Vision Provider (built-in adapter, optional)",
+        "vision_provider_none": "No built-in provider (local callbacks / external service only)",
+        "vision_provider_desc": "Built-in providers have the highest priority: openai_compatible works with OpenAI/Qwen-VL/Ollama/vLLM, anthropic uses Claude, llama_cpp uses local raw completion (fully offline). On failure it degrades to local callbacks / external service.",
+        "vision_model_label": "Model name",
+        "vision_model_placeholder": "e.g. gpt-4o / qwen-vl-max / claude-3-5-sonnet",
+        "vision_api_key_label": "API Key",
+        "vision_api_key_placeholder": "Required for cloud providers; leave empty for local llama.cpp / Ollama",
+        "vision_base_url_label": "Base URL",
+        "vision_base_url_placeholder": "e.g. http://127.0.0.1:8080/v1 (local llama.cpp / Ollama / vLLM)",
+        "vision_max_tokens_label": "Max output tokens",
+        "vision_temperature_label": "Temperature",
+        "vision_timeout_label": "Request timeout (seconds)",
+        "vision_prompt_label": "Default vision prompt",
+        "vision_prompt_placeholder": "Leave empty to use the built-in default",
+        "vision_safety_section": "🛡️ Vision Action Safety (plugin arbiter)",
+        "vision_safety_desc": "Safety thresholds for the vision plugin (vision_click / vision_type etc. L2 actions): circuit-breaker cooldown, idle lock, delegate, failure stop. L2 actions require explicit user approval in the approval dialog.",
+        "vision_idle_timeout_label": "User idle threshold (seconds)",
+        "vision_idle_allow_operate": "Allow Agent to keep operating while user is idle",
+        "vision_idle_allow_operate_desc": "Off by default: when the user leaves, everything locks except L0 read-only. When enabled, the Agent may keep operating while the user is away (at your own risk).",
+        "vision_delegate_window_label": "Delegate window (seconds)",
+        "vision_delegate_scope_label": "Delegate scope",
+        "vision_delegate_max_risk_label": "Delegate max risk (L3 never exempt)",
+        "vision_cooldown_label": "Circuit cooldown (seconds)",
+        "vision_max_failures_label": "Consecutive failures before stop",
+        "vision_use_framesource": "Enable resident capture_worker (faster action-verify loop)",
+        "vision_use_framesource_desc": "Off by default (cold-start the capture process each time, most robust). When enabled, the capture process stays resident so post-click/post-type re-capture verification is faster, at the cost of one persistent D3D11 capture session.",
     },
     "ru": {
         "app_title": "NORP Agent",
@@ -4175,6 +4143,32 @@ var I18N = {
         "vision_service_url_placeholder": "https://your-vision-service.example.com/process",
         "vision_service_url_desc": "Оставьте пустым для использования только локально зарегистрированных обработчиков (register_vision_handler). Сервис получает изображения/видео через POST JSON и возвращает текстовое описание.",
         "vision_required_hint": "Включите Vision API для загрузки изображений/видео",
+        "vision_provider_label": "Провайдер зрения (встроенный адаптер, опционально)",
+        "vision_provider_none": "Без встроенного провайдера (только локальные колбэки / внешний сервис)",
+        "vision_provider_desc": "Встроенные провайдеры имеют наивысший приоритет: openai_compatible совместим с OpenAI/Qwen-VL/Ollama/vLLM, anthropic — Claude, llama_cpp — локальный raw completion (полностью офлайн). При сбое автоматически переходит на локальные колбэки / внешний сервис.",
+        "vision_model_label": "Имя модели",
+        "vision_model_placeholder": "например gpt-4o / qwen-vl-max / claude-3-5-sonnet",
+        "vision_api_key_label": "API Key",
+        "vision_api_key_placeholder": "Обязателен для облачных провайдеров; пусто для локальных llama.cpp / Ollama",
+        "vision_base_url_label": "Base URL",
+        "vision_base_url_placeholder": "например http://127.0.0.1:8080/v1 (локальные llama.cpp / Ollama / vLLM)",
+        "vision_max_tokens_label": "Максимум выходных токенов",
+        "vision_temperature_label": "Температура",
+        "vision_timeout_label": "Таймаут запроса (сек)",
+        "vision_prompt_label": "Промпт зрения по умолчанию",
+        "vision_prompt_placeholder": "Пусто = использовать встроенный промпт по умолчанию",
+        "vision_safety_section": "🛡️ Безопасность операций зрения (арбитр плагина)",
+        "vision_safety_desc": "Пороги безопасности для плагина зрения (операции L2: vision_click / vision_type и т.д.): кулдаун предохранителя, блокировка при простое, делегирование, остановка при сбоях. Операции L2 требуют явного подтверждения пользователя в диалоге.",
+        "vision_idle_timeout_label": "Порог простоя пользователя (сек)",
+        "vision_idle_allow_operate": "Разрешить Агенту работать при простое пользователя",
+        "vision_idle_allow_operate_desc": "По умолчанию выключено: при уходе пользователя всё блокируется, кроме L0 (только чтение). При включении Агент может продолжать работу в отсутствие пользователя (на ваш риск).",
+        "vision_delegate_window_label": "Окно делегирования (сек)",
+        "vision_delegate_scope_label": "Область делегирования",
+        "vision_delegate_max_risk_label": "Макс. риск делегирования (L3 никогда не освобождается)",
+        "vision_cooldown_label": "Кулдаун предохранителя (сек)",
+        "vision_max_failures_label": "Неудач подряд до остановки",
+        "vision_use_framesource": "Включить резидентный capture_worker (быстрее цикл действие-проверка)",
+        "vision_use_framesource_desc": "По умолчанию выключено (холодный запуск процесса захвата каждый раз, самый надёжный вариант). При включении процесс захвата остаётся резидентным, повторный захват для проверки после клика/ввода быстрее, но занимает одну постоянную D3D11-сессию захвата.",
     },
     "ja": {
         "app_title": "NORP Agent",
@@ -4502,6 +4496,32 @@ var I18N = {
         "vision_service_url_placeholder": "https://your-vision-service.example.com/process",
         "vision_service_url_desc": "空の場合はローカル登録ハンドラ（register_vision_handler）のみ使用します。サービスはPOST JSONで画像/動画を受け取り、テキスト説明を返します。",
         "vision_required_hint": "画像/動画ファイルのアップロードにはビジョンAPIの有効化が必要です",
+        "vision_provider_label": "ビジョンProvider（内蔵アダプター、任意）",
+        "vision_provider_none": "内蔵providerを使用しない（ローカルコールバック/外部サービスのみ）",
+        "vision_provider_desc": "内蔵providerが最優先：openai_compatible は OpenAI/Qwen-VL/Ollama/vLLM 対応、anthropic は Claude、llama_cpp はローカルraw completion（完全オフライン）。失敗時はローカルコールバック/外部サービスへ自動降格します。",
+        "vision_model_label": "モデル名",
+        "vision_model_placeholder": "例: gpt-4o / qwen-vl-max / claude-3-5-sonnet",
+        "vision_api_key_label": "API Key",
+        "vision_api_key_placeholder": "クラウドproviderは必須。ローカル llama.cpp / Ollama は空で可",
+        "vision_base_url_label": "Base URL",
+        "vision_base_url_placeholder": "例: http://127.0.0.1:8080/v1（ローカル llama.cpp / Ollama / vLLM）",
+        "vision_max_tokens_label": "最大出力トークン",
+        "vision_temperature_label": "温度",
+        "vision_timeout_label": "リクエストタイムアウト（秒）",
+        "vision_prompt_label": "デフォルト視覚指示prompt",
+        "vision_prompt_placeholder": "空 = 内蔵デフォルト「画像の内容を詳しく説明してください」",
+        "vision_safety_section": "🛡️ 視覚操作の安全（外掛アービター）",
+        "vision_safety_desc": "視覚外掛（vision_click / vision_type などのL2操作）の安全閾値：ブレーカー冷却、アイドルロック、delegate譲渡、失敗停止。L2操作は承認ダイアログでのユーザー明示確認が必須です。",
+        "vision_idle_timeout_label": "ユーザーアイドル判定閾値（秒）",
+        "vision_idle_allow_operate": "アイドル中もAgentの操作を許可",
+        "vision_idle_allow_operate_desc": "デフォルトはオフ：ユーザーが離れるとロックされ、L0読み取りのみ許可。オンにするとユーザー不在時もAgentが操作可能（自己責任）。",
+        "vision_delegate_window_label": "delegate譲渡の長さ（秒）",
+        "vision_delegate_scope_label": "譲渡範囲",
+        "vision_delegate_max_risk_label": "譲渡の最高リスク級（L3は永続確認免除なし）",
+        "vision_cooldown_label": "ブレーカー冷却（秒）",
+        "vision_max_failures_label": "連続失敗停止回数",
+        "vision_use_framesource": "capture_worker常駐キャプチャを有効化（動作-検証ループ高速化）",
+        "vision_use_framesource_desc": "デフォルトはオフ（毎回キャプチャプロセスをコールドスタート、最も安定）。オンにするとキャプチャプロセスが常駐し、クリック/入力後の再キャプチャ検証が高速化されますが、D3D11キャプチャセッションを1つ占有し続けます。",
     }
 };
 
@@ -6539,24 +6559,6 @@ function handleEvent(event, tab) {
         if (replyText.indexOf('NORP安全系统拦截') !== -1 || replyText.indexOf('NORP safety') !== -1) {
             _handleNorpBlock(replyText, tab);
         }
-    } else if (event.indexOf('M:') === 0) {
-        // 用户消息（可能来自移动端等其它客户端），同步渲染到本端
-        var msgText = event.slice(2);
-        var lastMsg = chatContent.lastElementChild;
-        if (lastMsg && lastMsg.classList && lastMsg.classList.contains('user-msg')) {
-            var lastInner = lastMsg.querySelector('.user-text');
-            if (lastInner && (lastInner.textContent || '').trim() === msgText.trim()) {
-                return;
-            }
-        }
-        var uDiv = document.createElement('div');
-        uDiv.className = 'message user-msg';
-        var uInner = document.createElement('div');
-        uInner.className = 'user-text';
-        uInner.textContent = msgText;
-        uDiv.appendChild(uInner);
-        chatContent.appendChild(uDiv);
-        scrollChatToBottom();
     } else if (event.indexOf('C:') === 0) {
         flushAccumulated();
         appendOrAccumulateCommand(event.slice(2));
@@ -7017,7 +7019,6 @@ async function loadHistory() {
                 }
                 chatContent.appendChild(div);
             }
-            _idleSyncCount = history.length;
             scrollChatToBottom();
         }
         try {
@@ -7039,22 +7040,6 @@ async function loadHistory() {
     } catch(e) {
         console.warn('Failed to load history:', e);
     }
-}
-
-// ── 空闲同步：其它端（如移动端）发消息时，桌面端空闲状态下自动重绘 ──
-var _idleSyncCount = 0;
-
-function idleSync() {
-    if (isStreaming) return;
-    var tab = getActiveTab();
-    if (!tab || !tab.dbId) return;
-    window.pywebview.api.get_initial_messages(tab.dbId).then(function(history) {
-        var n = (history && history.length) || 0;
-        if (n !== _idleSyncCount) {
-            chatContent.innerHTML = '';
-            loadHistory();
-        }
-    }).catch(function(){});
 }
 
 async function handleSend() {
@@ -7348,11 +7333,6 @@ async function openSettings() {
     document.getElementById('cfg-jailbreak-guard-action').value = config.jailbreak_guard_action || 'block';
     updateJailbreakGuardStatus();
 
-    // 移动端远程控制
-    document.getElementById('cfg-remote-enabled').checked = config.remote_enabled === true;
-    document.getElementById('cfg-remote-host').value = config.remote_host || '127.0.0.1';
-    document.getElementById('cfg-remote-port').value = config.remote_port || 8090;
-
     // Custom system prompt
     document.getElementById('cfg-custom-prompt-enabled').checked = config.custom_system_prompt_enabled || false;
     document.getElementById('cfg-custom-prompt-source').value = config.custom_system_prompt_file ? 'file' : 'text';
@@ -7364,7 +7344,25 @@ async function openSettings() {
     // Vision API
     document.getElementById('cfg-vision-enabled').checked = config.vision_enabled === true;
     document.getElementById('cfg-vision-service-url').value = config.vision_service_url || '';
+    document.getElementById('cfg-vision-provider').value = config.vision_provider || '';
+    document.getElementById('cfg-vision-model').value = config.vision_model || '';
+    document.getElementById('cfg-vision-api-key').value = config.vision_api_key || '';
+    document.getElementById('cfg-vision-base-url').value = config.vision_base_url || '';
+    document.getElementById('cfg-vision-max-tokens').value = config.vision_max_tokens !== undefined ? config.vision_max_tokens : 1024;
+    document.getElementById('cfg-vision-temperature').value = config.vision_temperature !== undefined ? config.vision_temperature : 0.2;
+    document.getElementById('cfg-vision-timeout').value = config.vision_timeout !== undefined ? config.vision_timeout : 120;
+    document.getElementById('cfg-vision-prompt').value = config.vision_prompt || '';
     updateVisionVisibility();
+
+    // Vision action safety (plugin arbiter)
+    document.getElementById('cfg-vision-idle-timeout').value = config.vision_idle_timeout_sec !== undefined ? config.vision_idle_timeout_sec : 150;
+    document.getElementById('cfg-vision-idle-allow-operate').checked = config.vision_idle_allow_operate === true;
+    document.getElementById('cfg-vision-delegate-window').value = config.vision_delegate_window_sec !== undefined ? config.vision_delegate_window_sec : 300;
+    document.getElementById('cfg-vision-delegate-scope').value = config.vision_delegate_scope || 'window';
+    document.getElementById('cfg-vision-delegate-max-risk').value = config.vision_delegate_max_risk || 'L2';
+    document.getElementById('cfg-vision-cooldown').value = config.vision_cooldown_sec !== undefined ? config.vision_cooldown_sec : 60;
+    document.getElementById('cfg-vision-max-failures').value = config.vision_max_failures !== undefined ? config.vision_max_failures : 3;
+    document.getElementById('cfg-vision-framesource').checked = config.vision_use_framesource === true;
 
     updateQueueWarning();
     setLanguage(currentLang);
@@ -7519,9 +7517,22 @@ async function saveSettings() {
         jailbreak_guard_action: document.getElementById('cfg-jailbreak-guard-action').value,
         vision_enabled: document.getElementById('cfg-vision-enabled').checked,
         vision_service_url: document.getElementById('cfg-vision-service-url').value.trim(),
-        remote_enabled: document.getElementById('cfg-remote-enabled').checked,
-        remote_host: document.getElementById('cfg-remote-host').value.trim() || '127.0.0.1',
-        remote_port: parseInt(document.getElementById('cfg-remote-port').value) || 8090,
+        vision_provider: document.getElementById('cfg-vision-provider').value,
+        vision_model: document.getElementById('cfg-vision-model').value.trim(),
+        vision_api_key: document.getElementById('cfg-vision-api-key').value,
+        vision_base_url: document.getElementById('cfg-vision-base-url').value.trim(),
+        vision_max_tokens: parseInt(document.getElementById('cfg-vision-max-tokens').value) || 1024,
+        vision_temperature: parseFloat(document.getElementById('cfg-vision-temperature').value) || 0.2,
+        vision_timeout: parseInt(document.getElementById('cfg-vision-timeout').value) || 120,
+        vision_prompt: document.getElementById('cfg-vision-prompt').value,
+        vision_idle_timeout_sec: parseInt(document.getElementById('cfg-vision-idle-timeout').value) || 150,
+        vision_idle_allow_operate: document.getElementById('cfg-vision-idle-allow-operate').checked,
+        vision_delegate_window_sec: parseInt(document.getElementById('cfg-vision-delegate-window').value) || 300,
+        vision_delegate_scope: document.getElementById('cfg-vision-delegate-scope').value,
+        vision_delegate_max_risk: document.getElementById('cfg-vision-delegate-max-risk').value,
+        vision_cooldown_sec: parseInt(document.getElementById('cfg-vision-cooldown').value) || 60,
+        vision_max_failures: parseInt(document.getElementById('cfg-vision-max-failures').value) || 3,
+        vision_use_framesource: document.getElementById('cfg-vision-framesource').checked,
     };
 
     try {
@@ -9157,9 +9168,6 @@ window.addEventListener('pywebviewready', async function() {
             dismissLoadingOverlay();
         }, 700);
 
-        // ── 启动空闲同步：其它端（如移动端）发消息时，桌面端自动重绘 ──
-        setInterval(idleSync, 1200);
-
     } catch(e) {
         config = {};
         userInput.disabled = false;
@@ -9418,418 +9426,6 @@ window.addEventListener('unhandledrejection', function(event) {
         }
     }, CHECK_INTERVAL);
 })();
-
-// ═══════════════════════════════════════════════════════════════
-//  SSH — Remote ops panel
-// ═══════════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════
-//  SSH — 远程运维面板
-//  主机管理 / 执行 / 传输 / 隧道 / 集群
-// ═══════════════════════════════════════════════════════════════
-
-function sshEsc(s) {
-    return String(s == null ? '' : s)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
-
-function sshApi(name) {
-    var args = Array.prototype.slice.call(arguments, 1);
-    return window.pywebview.api[name].apply(window.pywebview.api, args);
-}
-
-function openSsh() {
-    document.getElementById('ssh-modal').style.display = 'block';
-    sshSwitchTab('hosts');
-}
-
-function closeSsh() {
-    document.getElementById('ssh-modal').style.display = 'none';
-}
-
-function sshSwitchTab(tab) {
-    document.querySelectorAll('.ssh-tab').forEach(function (b) {
-        b.classList.toggle('active', b.getAttribute('data-tab') === tab);
-    });
-    ['hosts', 'exec', 'transfer', 'tunnel', 'cluster', 'terminal'].forEach(function (name) {
-        var el = document.getElementById('ssh-panel-' + name);
-        if (el) el.style.display = (name === tab) ? 'block' : 'none';
-    });
-    if (tab === 'hosts') sshRefreshHosts();
-    if (tab === 'exec' || tab === 'transfer' || tab === 'tunnel' || tab === 'terminal') sshPopulateHostSelects();
-    if (tab === 'tunnel') sshTunnelList();
-    if (tab === 'terminal') sshTermEnsure();
-}
-
-// ── 主机管理 ────────────────────────────────────────────────────
-async function sshRefreshHosts() {
-    var list = document.getElementById('ssh-host-list');
-    var q = document.getElementById('ssh-host-search').value || '';
-    var hosts = [];
-    try { hosts = await sshApi('ssh_list_hosts', q); } catch (e) { hosts = []; }
-    if (!hosts || !hosts.length) {
-        list.innerHTML = '<div style="color:#888;padding:8px;">暂无主机。用下方表单添加，或点「导入 ~/.ssh/config」。</div>';
-        return;
-    }
-    var html = '<table class="ssh-host-table"><thead><tr>' +
-        '<th>别名</th><th>主机</th><th>用户</th><th>端口</th><th>认证</th><th>密钥</th><th>标签</th><th>操作</th>' +
-        '</tr></thead><tbody>';
-    hosts.forEach(function (h) {
-        var auth = h.auth === 'password' ? '🔒密码' : '🔑密钥';
-        var key = (h.auth !== 'password' && h.identity_file) ? (h.key_ready ? '✅' : '⚠️') : '—';
-        var tags = (h.tags || []).join(',');
-        html += '<tr>' +
-            '<td><b>' + sshEsc(h.alias) + '</b></td>' +
-            '<td>' + sshEsc(h.host) + '</td>' +
-            '<td>' + sshEsc(h.user) + '</td>' +
-            '<td>' + h.port + '</td>' +
-            '<td>' + auth + '</td>' +
-            '<td>' + key + '</td>' +
-            '<td>' + sshEsc(tags) + '</td>' +
-            '<td>' +
-                '<button class="btn-small" data-test="' + sshEsc(h.alias) + '">测</button> ' +
-                '<button class="btn-small btn-danger" data-del="' + sshEsc(h.alias) + '">删</button>' +
-            '</td>' +
-        '</tr>';
-    });
-    html += '</tbody></table>';
-    list.innerHTML = html;
-    list.querySelectorAll('[data-test]').forEach(function (b) {
-        b.onclick = function () { sshTestHost(b.getAttribute('data-test')); };
-    });
-    list.querySelectorAll('[data-del]').forEach(function (b) {
-        b.onclick = function () { sshDelHost(b.getAttribute('data-del')); };
-    });
-}
-
-async function sshAddHost() {
-    var g = function (id) { return document.getElementById(id).value.trim(); };
-    var entry = {
-        alias: g('ssh-f-alias'), host: g('ssh-f-host'), user: g('ssh-f-user'),
-        port: parseInt(g('ssh-f-port') || '22', 10),
-        auth: document.getElementById('ssh-f-auth').value,
-        identity_file: g('ssh-f-identity'), password: document.getElementById('ssh-f-password').value,
-        jump: g('ssh-f-jump'), tags: g('ssh-f-tags')
-    };
-    if (!entry.alias || !entry.host) { alert('别名 和 主机 为必填'); return; }
-    var r = await sshApi('ssh_add_host', entry);
-    alert(r.message || (r.ok ? '已保存' : '保存失败'));
-    sshRefreshHosts();
-}
-
-async function sshDelHost(alias) {
-    if (!confirm('确认删除主机 ' + alias + ' ？')) return;
-    var r = await sshApi('ssh_remove_host', alias);
-    alert(r.message || '');
-    sshRefreshHosts();
-}
-
-async function sshTestHost(alias) {
-    var r = await sshApi('ssh_test_host', alias, 12);
-    alert((r.ok ? '✅ ' : '❌ ') + (r.message || ''));
-}
-
-async function sshImportConfig() {
-    var r = await sshApi('ssh_import_config');
-    alert(r.message || '');
-    sshRefreshHosts();
-}
-
-// ── 主机下拉框（执行/传输/隧道共用）─────────────────────────────
-async function sshPopulateHostSelects() {
-    var hosts = [];
-    try { hosts = await sshApi('ssh_list_hosts', ''); } catch (e) { hosts = []; }
-    ['ssh-exec-host', 'ssh-xfer-host', 'ssh-tun-host', 'ssh-term-host'].forEach(function (id) {
-        var sel = document.getElementById(id);
-        if (!sel) return;
-        var cur = sel.value;
-        sel.innerHTML = '';
-        (hosts || []).forEach(function (h) {
-            var o = document.createElement('option');
-            o.value = h.alias;
-            o.textContent = h.alias + ' (' + h.host + ')';
-            sel.appendChild(o);
-        });
-        if (cur) sel.value = cur;
-    });
-}
-
-// ── 执行 ────────────────────────────────────────────────────────
-async function sshExecRun() {
-    var host = document.getElementById('ssh-exec-host').value;
-    var cmd = document.getElementById('ssh-exec-cmd').value;
-    var timeout = parseInt(document.getElementById('ssh-exec-timeout').value) || 60;
-    if (!host || !cmd) { alert('请选主机并输入命令'); return; }
-    var out = document.getElementById('ssh-exec-output');
-    out.style.display = 'block';
-    out.textContent = '执行中…';
-    var r = await sshApi('ssh_exec_cmd', host, cmd, timeout);
-    out.textContent = (r.stdout ? r.stdout : '') +
-        (r.stderr ? '\n[stderr] ' + r.stderr : '') +
-        '\n[exit ' + r.rc + ']';
-}
-
-// ── 传输 ────────────────────────────────────────────────────────
-async function sshUpload() {
-    var host = document.getElementById('ssh-xfer-host').value;
-    var local = document.getElementById('ssh-up-local').value.trim();
-    var remote = document.getElementById('ssh-up-remote').value.trim();
-    if (!host || !local || !remote) { alert('请选主机并填写路径'); return; }
-    var r = await sshApi('ssh_upload_file', host, local, remote);
-    alert(r.message || (r.ok ? '上传成功' : '上传失败'));
-}
-
-async function sshDownload() {
-    var host = document.getElementById('ssh-xfer-host').value;
-    var remote = document.getElementById('ssh-down-remote').value.trim();
-    var local = document.getElementById('ssh-down-local').value.trim();
-    if (!host || !remote || !local) { alert('请选主机并填写路径'); return; }
-    var r = await sshApi('ssh_download_file', host, remote, local);
-    alert(r.message || (r.ok ? '下载成功' : '下载失败'));
-}
-
-async function sshPickUpload() {
-    try { var p = await sshApi('pick_open_file'); if (typeof p === 'string' && p) document.getElementById('ssh-up-local').value = p; } catch (e) {}
-}
-
-async function sshPickDownload() {
-    try { var p = await sshApi('pick_save_file'); if (typeof p === 'string' && p) document.getElementById('ssh-down-local').value = p; } catch (e) {}
-}
-
-// ── 隧道 ────────────────────────────────────────────────────────
-async function sshTunnelStart() {
-    var host = document.getElementById('ssh-tun-host').value;
-    var rp = parseInt(document.getElementById('ssh-tun-remote-port').value);
-    var rh = document.getElementById('ssh-tun-remote-host').value.trim() || '127.0.0.1';
-    if (!host || !rp) { alert('请选主机并填远程端口'); return; }
-    var r = await sshApi('ssh_tunnel_start', host, rp, rh, 0);
-    alert(r.message || '');
-    sshTunnelList();
-}
-
-async function sshTunnelList() {
-    var list = document.getElementById('ssh-tun-list');
-    var ts = [];
-    try { ts = await sshApi('ssh_tunnel_list'); } catch (e) { ts = []; }
-    if (!ts || !ts.length) { list.innerHTML = '<div style="color:#888;padding:6px;">没有活动隧道</div>'; return; }
-    var html = '';
-    ts.forEach(function (t) {
-        html += '<div class="flex-row" style="gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid #2a2a2a;">' +
-            '<span>' + (t.alive ? '🟢' : '🔴') + ' ' + sshEsc(t.id) + '</span>' +
-            '<span style="color:#888;font-size:12px;">127.0.0.1:' + t.local_port + ' → ' + sshEsc(t.remote) + '</span>' +
-            '<span style="flex:1;"></span>' +
-            '<button class="btn-small btn-danger" data-tstop="' + sshEsc(t.id) + '">关闭</button>' +
-            '</div>';
-    });
-    list.innerHTML = html;
-    list.querySelectorAll('[data-tstop]').forEach(function (b) {
-        b.onclick = function () { sshTunnelStop(b.getAttribute('data-tstop')); };
-    });
-}
-
-async function sshTunnelStop(id) {
-    var r = await sshApi('ssh_tunnel_stop', id);
-    alert(r.message || '');
-    sshTunnelList();
-}
-
-async function sshTunnelStopAll() {
-    var r = await sshApi('ssh_tunnel_stop_all');
-    alert(r.message || '');
-    sshTunnelList();
-}
-
-// ── 集群 ────────────────────────────────────────────────────────
-async function sshClusterRun() {
-    var cmd = document.getElementById('ssh-cl-cmd').value;
-    if (!cmd) { alert('请输入命令'); return; }
-    var aliases = document.getElementById('ssh-cl-aliases').value.trim().split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-    var tags = document.getElementById('ssh-cl-tags').value.trim().split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-    var env = document.getElementById('ssh-cl-env').value.trim();
-    var res = [];
-    try { res = await sshApi('ssh_cluster_run', cmd, aliases, env, tags, 60, 8); } catch (e) { res = []; }
-    var el = document.getElementById('ssh-cl-result');
-    if (!res || !res.length) { el.innerHTML = '<div style="color:#888;">没有匹配的主机</div>'; return; }
-    var html = '';
-    res.forEach(function (r) {
-        html += '<div style="padding:6px 0;border-bottom:1px solid #2a2a2a;">' +
-            '<b>' + (r.rc === 0 ? '✅' : '❌') + ' ' + sshEsc(r.alias) + '</b> (exit ' + r.rc + ')' +
-            '<pre style="margin:4px 0 0;white-space:pre-wrap;font-size:12px;color:#ccc;">' + sshEsc(r.output) + '</pre></div>';
-    });
-    el.innerHTML = html;
-}
-
-// ── 终端 ────────────────────────────────────────────────────────
-var sshTermId = null;
-var sshTermTimer = null;
-
-function sshStripAnsi(s) {
-    return String(s || '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
-}
-
-async function sshTermOpen() {
-    var host = document.getElementById('ssh-term-host').value;
-    if (!host) { alert('请先选主机'); return; }
-    var r = await sshApi('ssh_terminal_open', host);
-    if (!r || !r.ok) { alert((r && r.message) || '连接失败'); return; }
-    sshTermId = r.terminal_id;
-    document.getElementById('ssh-term-output').textContent = '';
-    sshTermPoll();
-    if (sshTermTimer) clearInterval(sshTermTimer);
-    sshTermTimer = setInterval(sshTermPoll, 300);
-}
-
-async function sshTermPoll() {
-    if (!sshTermId) return;
-    var r = await sshApi('ssh_terminal_read', sshTermId);
-    var out = document.getElementById('ssh-term-output');
-    if (r && r.data) {
-        out.textContent += sshStripAnsi(r.data);
-        out.scrollTop = out.scrollHeight;
-    }
-    if (r && r.closed) {
-        out.textContent += '\n[连接已关闭]';
-        sshTermStop();
-    }
-}
-
-async function sshTermSend() {
-    var input = document.getElementById('ssh-term-input');
-    var text = input.value;
-    if (!sshTermId) { alert('未连接'); return; }
-    input.value = '';
-    await sshApi('ssh_terminal_write', sshTermId, text + '\n');
-    sshTermPoll();
-}
-
-async function sshTermClose() {
-    if (sshTermId) { await sshApi('ssh_terminal_close', sshTermId); }
-    sshTermStop();
-    document.getElementById('ssh-term-output').textContent += '\n[已断开]';
-}
-
-function sshTermStop() {
-    sshTermId = null;
-    if (sshTermTimer) { clearInterval(sshTermTimer); sshTermTimer = null; }
-}
-
-function sshTermEnsure() {
-    sshPopulateHostSelects();
-    if (sshTermId && !sshTermTimer) sshTermTimer = setInterval(sshTermPoll, 300);
-}
-
-// ── 事件绑定 ────────────────────────────────────────────────────
-document.getElementById('ssh-btn').addEventListener('click', openSsh);
-document.getElementById('ssh-close').addEventListener('click', closeSsh);
-document.getElementById('ssh-host-add').addEventListener('click', sshAddHost);
-document.getElementById('ssh-host-refresh').addEventListener('click', sshRefreshHosts);
-document.getElementById('ssh-host-import').addEventListener('click', sshImportConfig);
-document.getElementById('ssh-host-search').addEventListener('input', sshRefreshHosts);
-document.getElementById('ssh-exec-run').addEventListener('click', sshExecRun);
-document.getElementById('ssh-up-go').addEventListener('click', sshUpload);
-document.getElementById('ssh-down-go').addEventListener('click', sshDownload);
-document.getElementById('ssh-up-browse').addEventListener('click', sshPickUpload);
-document.getElementById('ssh-down-browse').addEventListener('click', sshPickDownload);
-document.getElementById('ssh-tun-start').addEventListener('click', sshTunnelStart);
-document.getElementById('ssh-tun-stop-all').addEventListener('click', sshTunnelStopAll);
-document.getElementById('ssh-cl-run').addEventListener('click', sshClusterRun);
-document.getElementById('ssh-term-open').addEventListener('click', sshTermOpen);
-document.getElementById('ssh-term-close').addEventListener('click', sshTermClose);
-document.getElementById('ssh-term-send').addEventListener('click', sshTermSend);
-document.getElementById('ssh-term-input').addEventListener('keydown', function (e) { if (e.key === 'Enter') sshTermSend(); });
-document.querySelectorAll('.ssh-tab').forEach(function (b) {
-    b.addEventListener('click', function () { sshSwitchTab(b.getAttribute('data-tab')); });
-});
-
-
-// ═══════════════════════════════════════════════════════════════
-//  Remote — Mobile remote control
-// ═══════════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════
-//  移动端远程控制 —— 桌面端按钮 + 二维码/链接
-// ═══════════════════════════════════════════════════════════════
-
-function remoteEsc(s) {
-    return String(s == null ? '' : s)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
-
-function openRemote() {
-    document.getElementById('remote-modal').style.display = 'block';
-    refreshRemote();
-}
-
-function closeRemote() {
-    document.getElementById('remote-modal').style.display = 'none';
-}
-
-async function refreshRemote() {
-    var body = document.getElementById('remote-body');
-    var st = {};
-    try { st = await window.pywebview.api.get_remote_status(); } catch (e) { st = {}; }
-
-    if (!st.enabled) {
-        body.innerHTML = '<div style="background:#fff3cd;color:#664d03;padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.8;">' +
-            '此功能需要先<b>启用远程访问</b>才能让手机连上。<br>' +
-            '当前服务未启用，手机无法访问。<br>' +
-            '请前往 <b>设置 → 📱 移动端远程控制</b>：勾选「启用远程访问」，把绑定地址设为 <b>0.0.0.0</b>（或填写内网穿透的公网地址），然后<b>重启 NORP</b>。</div>';
-        return;
-    }
-    if (!st.running) {
-        body.innerHTML = '<div style="background:#fff3cd;color:#664d03;padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.8;">' +
-            '⚠️ 远程服务<b>启动失败</b>，很可能是端口被占用（例如 DeepSeek Harness 占用了 3080）。<br>' +
-            '请在 <b>设置 → 📱 移动端远程控制</b> 中换一个端口（如 <b>8090</b>），保存后<b>重启 NORP</b>。</div>';
-        return;
-    }
-    if (!st.lan_accessible) {
-        body.innerHTML = '<div style="background:#fff3cd;color:#664d03;padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.8;">' +
-            '当前服务仅绑定 <b>' + remoteEsc(st.host || '127.0.0.1') + '</b>，手机无法访问。<br>' +
-            '请在 <b>设置 → 📱 移动端远程控制</b> 中把绑定地址改为 <b>0.0.0.0</b> 并重启。</div>';
-        return;
-    }
-
-    var ips = st.lan_ips || [];
-    if (!ips.length) ips = ['127.0.0.1'];
-
-    var html = '<div style="font-size:13px;color:#888;">选择二维码指向的网络：</div>' +
-        '<select id="remote-net" style="width:100%;margin:6px 0;background:#1e232d;color:#e6e6e6;border:1px solid #333;border-radius:6px;padding:6px;">';
-    ips.forEach(function (ip) {
-        html += '<option value="' + remoteEsc(ip) + '">局域网 ' + remoteEsc(ip) + '</option>';
-    });
-    html += '</select>' +
-        '<div style="text-align:center;margin:12px 0;"><img id="remote-qr-img" alt="二维码" style="background:#fff;padding:8px;border-radius:8px;width:200px;height:200px;"></div>' +
-        '<div class="flex-row" style="gap:6px;">' +
-        '<input type="text" id="remote-link-input" readonly style="flex:1;background:#1e232d;color:#e6e6e6;border:1px solid #333;border-radius:6px;padding:6px 8px;font-size:12px;">' +
-        '<button class="btn-small" id="remote-copy">复制</button>' +
-        '</div>' +
-        '<div style="font-size:11px;color:#888;margin-top:6px;">手机与电脑在同一网络时，扫码或打开链接即可。</div>';
-    body.innerHTML = html;
-
-    function renderQr() {
-        var ip = document.getElementById('remote-net').value;
-        var url = 'http://' + ip + ':' + (st.port || 8090) + '/';
-        document.getElementById('remote-link-input').value = url;
-        window.pywebview.api.get_remote_qr(url).then(function (dataUrl) {
-            if (dataUrl) document.getElementById('remote-qr-img').src = dataUrl;
-        });
-    }
-    document.getElementById('remote-net').addEventListener('change', renderQr);
-    document.getElementById('remote-copy').addEventListener('click', function () {
-        var el = document.getElementById('remote-link-input');
-        el.select();
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(el.value).then(function () {
-                document.getElementById('remote-copy').textContent = '已复制';
-            });
-        }
-    });
-    renderQr();
-}
-
-document.getElementById('remote-btn').addEventListener('click', openRemote);
-document.getElementById('remote-close').addEventListener('click', closeRemote);
-
 </script>
 </body>
 </html>

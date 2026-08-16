@@ -60,7 +60,8 @@ class ApprovalPolicy:
             ``approval_enabled``         : bool（默认 True，总开关）
     """
 
-    def __init__(self, config: Optional[dict] = None):
+    def __init__(self, config: Optional[dict] = None,
+                 tool_hints: Optional[dict] = None):
         config = config or {}
         # ── 原生工具确认（设置面板）──
         legacy = config.get("confirm_write_delete", True)
@@ -70,6 +71,16 @@ class ApprovalPolicy:
         self.native_exec = bool(config.get("native_confirm_exec", True))
         # ── 插件工具调用审批（插件控制面板）──
         self.plugin_enabled = bool(config.get("approval_enabled", True))
+        # ── 插件工具审批提示（APPROVAL_HINTS，按工具名精细控制）──
+        # 格式：{tool_name: {"approval": "none"|"plugin", "risk": "L0"~"L3"}}
+        #  - approval="none"   ：该工具调用不弹审批（如只读工具）
+        #  - approval="plugin" ：走 approval_enabled 总开关（默认行为）
+        #  - 未声明的工具       ：默认走总开关（向后兼容）
+        self._tool_hints = tool_hints or {}
+
+    def set_tool_hints(self, tool_hints: Optional[dict]) -> None:
+        """刷新插件工具审批提示（每次确认前由调用方更新）。"""
+        self._tool_hints = tool_hints or {}
 
     def level_of(self, tool_name: str) -> ApprovalLevel:
         """返回原生工具对应的审批级别。"""
@@ -88,7 +99,13 @@ class ApprovalPolicy:
         返回 (是否需要审批, 审批级别)。
         """
         if is_plugin:
-            # 插件工具名由插件自定义，无法预映射级别：总开关开启即全审。
+            # 插件工具名由插件自定义，无法预映射级别：默认总开关开启即全审。
+            # 若插件声明了 APPROVAL_HINTS，则按 hint 精细控制：
+            #   "none"   → 免审批（插件自认只读/低风险，如 L0/L1）
+            #   "plugin" → 按总开关（默认行为）
+            hint = self._tool_hints.get(tool_name)
+            if isinstance(hint, dict) and hint.get("approval") == "none":
+                return False, ApprovalLevel.NONE
             return self.plugin_enabled, ApprovalLevel.PLUGIN
 
         level = self.level_of(tool_name)

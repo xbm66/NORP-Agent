@@ -26,6 +26,11 @@ ALGORITHM = "ed25519"
 # 对应的私钥仅存于开发者本地，绝不出现在源码 / 打包产物中。
 OFFICIAL_PUBLIC_KEY = "199adcb6801cb969212120487df0b1af4c9099f1ec597873cd9f6216cea09178"
 
+# 视觉外挂专属签名公钥（vision_agent.py 等视觉官方插件）。
+# 与官方公钥并列信任：两者签出的插件均走 trusted 通道
+# （审计放宽为 warn、导入限制 off）。私钥仅存开发者本地。
+VISION_PUBLIC_KEY = "5cefeac5f416786edae0373b8fdff9d07702547441f5cda9a640b79a960c406a"
+
 
 class SignatureStatus:
     """签名校验结果状态。"""
@@ -172,7 +177,7 @@ class SignatureVerifier:
     def __init__(self, config: Optional[dict] = None):
         config = config or {}
         self.enabled: bool = bool(config.get("plugin_signature_verify", True))
-        self._trusted_keys: List[str] = [OFFICIAL_PUBLIC_KEY]
+        self._trusted_keys: List[str] = [OFFICIAL_PUBLIC_KEY, VISION_PUBLIC_KEY]
         user_keys = config.get("plugin_trusted_keys", [])
         if isinstance(user_keys, (list, tuple)):
             for k in user_keys:

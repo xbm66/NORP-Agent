@@ -67,11 +67,6 @@ class ConfigManager:
             "plugin_security_require_permissions": True,   # ★ 默认开启：插件必须声明权限
             "plugin_security_resource_limit": False,
 
-            # 移动端远程控制（默认不启用：host=127.0.0.1 仅本机可访问）
-            "remote_enabled": False,
-            "remote_host": "127.0.0.1",
-            "remote_port": 8090,
-
             # ★ P0-1 进程级隔离：插件严禁直接挂载到主进程。
             #   "process"（默认）= 在独立子进程加载并执行插件；
             #   "inprocess" = 旧行为（仅限开发调试，不推荐）。
@@ -143,6 +138,18 @@ class ConfigManager:
             "vision_temperature": 0.2,   # 视觉描述温度（偏低 = 更确定）
             "vision_timeout": 120,       # 视觉请求超时（秒）
             "vision_prompt": "",         # 默认视觉指令 prompt（空 = 用内置默认「请详细描述图片内容」）
+
+            # 视觉/操作外挂安全参数（SafetyArbiter 裁决器，见 vision_safety.py）：
+            # 风险分级由工具名固定（vision_click 等 L2 工具需用户审批弹窗显式确认），
+            # 以下参数控制熔断 / 在场检测 / delegate 让渡的阈值。
+            "vision_idle_timeout_sec": 150,   # 用户空闲多久判定「离开」（默认 150s）
+            "vision_idle_allow_operate": False,  # 空闲后是否允许 Agent 继续操作（默认锁死）
+            "vision_delegate_window_sec": 300,   # delegate 让渡（预授权）时长
+            "vision_delegate_scope": "window",   # 让渡范围：window | app | session
+            "vision_delegate_max_risk": "L2",    # 让渡最多覆盖到哪一级（L3 永不免确认）
+            "vision_cooldown_sec": 60,           # 熔断冷却时长（冷却期内不可复位）
+            "vision_max_failures": 3,            # 同一操作连续失败 N 次 → 停手上报
+            "vision_use_framesource": False,     # 动作-验证-收敛用 capture_worker 驻留模式（高频循环更快；默认冷启动更稳）
         }
 
     def load(self) -> Dict[str, Any]:

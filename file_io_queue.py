@@ -2,7 +2,7 @@
 # 检测多线程读写同一文件的冲突，塞进栈队列序列化访问
 # Copyright (c) 2026 xingluosama
 
-import asyncio
+import nasync_io
 import os
 import threading
 import time
@@ -26,7 +26,7 @@ class FileAccessRequest:
     file_path: str          # 规范化后的绝对路径
     operation: FileOp
     timestamp: float = field(default_factory=time.time)
-    _future: Optional[asyncio.Future] = None  # 异步等待者
+    _future: Optional[nasync_io.Future] = None  # 异步等待者
 
     @property
     def is_write(self) -> bool:
@@ -77,16 +77,16 @@ class FileIOQueue:
                 return True
 
             # 有冲突：加入等待队列
-            request._future = asyncio.get_running_loop().create_future()
+            request._future = nasync_io.get_running_loop().create_future()
             state["queue"].append(request)
             self._stats["total_queued"] += 1
             self._stats["total_conflicts"] += 1
 
         # 在锁外等待
         try:
-            await asyncio.wait_for(request._future, timeout=30.0)
+            await nasync_io.wait_for(request._future, timeout=30.0)
             return True
-        except asyncio.TimeoutError:
+        except nasync_io.TimeoutError:
             with self._lock:
                 self._remove_from_queue(file_path, request)
             return False

@@ -2,7 +2,7 @@
 # 大沙池下分出8个以内的沙箱，异步获取/释放
 # Copyright (c) 2026 xingluosama
 
-import asyncio
+import nasync_io
 import os
 import subprocess
 import sys
@@ -69,11 +69,11 @@ class SandboxPool:
     异步获取/释放，支持等待队列。"""
 
     def __init__(self):
-        self._lock = asyncio.Lock()
-        self._available = asyncio.Condition(self._lock)
+        self._lock = nasync_io.Lock()
+        self._available = nasync_io.Condition(self._lock)
         self._sandboxes: List[Sandbox] = []
         self._total_created = 0
-        self._waiters: List[asyncio.Future] = []
+        self._waiters: List[nasync_io.Future] = []
 
     @property
     def total(self) -> int:
@@ -124,7 +124,7 @@ class SandboxPool:
                 return sb
 
             # 等待释放
-            fut = asyncio.get_running_loop().create_future()
+            fut = nasync_io.get_running_loop().create_future()
             self._waiters.append(fut)
             await fut
             # 重新尝试获取
@@ -197,7 +197,9 @@ class SandboxPool:
                               extra_paths: Optional[Dict[str, str]] = None) -> Sandbox:
         """创建一个新的沙箱实例。"""
         sid = f"sb_{uuid.uuid4().hex[:8]}"
-        sb = Sandbox(sandbox_id=sid)
+        # ★ 修复：Sandbox dataclass 的 workspace_root 为必填字段，
+        # 构造时即传入，避免 TypeError（setup_path_map 会再覆盖为绝对路径）
+        sb = Sandbox(sandbox_id=sid, workspace_root=workspace_root or os.getcwd())
 
         self._setup_path_map(sb, workspace_root, extra_paths)
 
@@ -206,7 +208,7 @@ class SandboxPool:
         if not docker_ok:
             await self._start_process_sandbox(sb)
 
-        sb.created_at = asyncio.get_running_loop().time()
+        sb.created_at = nasync_io.get_running_loop().time()
         self._total_created += 1
         return sb
 
@@ -322,18 +324,18 @@ class SandboxPool:
             creationflags |= 0x08000000
 
         try:
-            proc = await asyncio.create_subprocess_shell(
+            proc = await nasync_io.create_subprocess_shell(
                 cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stdin=nasync_io.subprocess.DEVNULL,
+                stdout=nasync_io.subprocess.PIPE,
+                stderr=nasync_io.subprocess.PIPE,
                 cwd=workdir,
                 env=env,
                 creationflags=creationflags if platform.system() == "Windows" else 0,
                 start_new_session=True,
             )
 
-            stdout, stderr = await asyncio.wait_for(
+            stdout, stderr = await nasync_io.wait_for(
                 proc.communicate(), timeout=timeout
             )
             output = (robust_decode(stdout) if stdout else "") + \
@@ -342,7 +344,7 @@ class SandboxPool:
                 output = f"Command exited with code {proc.returncode}"
             return output.strip()
 
-        except asyncio.TimeoutError:
+        except nasync_io.TimeoutError:
             # 超时：杀整个进程组
             try:
                 if platform.system() == "Windows":

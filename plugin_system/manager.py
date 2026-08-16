@@ -65,7 +65,8 @@ class PluginInfo:
 
     __slots__ = ("name", "path", "version", "publisher", "description",
                  "enabled", "error", "tools", "module", "_hook_names",
-                 "signature_status", "trusted", "isolation", "has_execute")
+                 "signature_status", "trusted", "isolation", "has_execute",
+                 "approval_hints")
 
     def __init__(self, name: str, path: str):
         self.name = name
@@ -82,6 +83,7 @@ class PluginInfo:
         self.trusted: bool = False          # 是否受信任签名
         self.isolation: str = "process"     # 该插件实际运行模式
         self.has_execute: bool = False      # 是否定义 execute()
+        self.approval_hints: Dict[str, dict] = {}  # 工具 → 审批提示（APPROVAL_HINTS）
 
     @property
     def hook_names(self) -> List[str]:
@@ -372,6 +374,23 @@ class PluginManager:
                     tools.append(tool)
         return tools
 
+    def get_tool_approval_hints(self) -> Dict[str, dict]:
+        """返回所有启用插件声明的「工具 → 审批提示」合并表。
+
+        格式：{tool_name: {"approval": "none"|"plugin", "risk": "L0"~"L3"或空}}
+        主进程审批层（async_loop）据此精细决定插件工具是否弹窗审批，
+        默认（无 hint）行为不变：走 approval_enabled 总开关。
+        """
+        hints: Dict[str, dict] = {}
+        with self._lock:
+            for info in self._plugins.values():
+                if not info.enabled:
+                    continue
+                for tname, hint in (info.approval_hints or {}).items():
+                    if tname not in hints:
+                        hints[tname] = dict(hint)
+        return hints
+
     def get_all_plugins(self) -> List[dict]:
         """Return metadata for every discovered plugin (for the front-end)."""
         result: List[dict] = []
@@ -645,6 +664,8 @@ class PluginManager:
         hooks = desc.get("hook_names")
         info._hook_names = [h for h in hooks if h in HOOK_NAMES] if isinstance(hooks, list) else []
         info.has_execute = bool(desc.get("has_execute", False))
+        hints = desc.get("approval_hints")
+        info.approval_hints = hints if isinstance(hints, dict) else {}
         info.module = None  # 模块驻留在子进程
         info.isolation = "process"
 
@@ -692,6 +713,20 @@ class PluginManager:
         tools = getattr(module, "TOOLS", None)
         info.tools = tools if isinstance(tools, list) else []
         info.has_execute = callable(getattr(module, "execute", None))
+        raw_hints = getattr(module, "APPROVAL_HINTS", None)
+        hints: Dict[str, dict] = {}
+        if isinstance(raw_hints, dict):
+            for tname, hint in raw_hints.items():
+                if not isinstance(tname, str):
+                    continue
+                if isinstance(hint, str):
+                    hints[tname] = {"approval": hint}
+                elif isinstance(hint, dict):
+                    hints[tname] = {
+                        "approval": str(hint.get("approval", "plugin")),
+                        "risk": str(hint.get("risk", "")),
+                    }
+        info.approval_hints = hints
         for hook_name in HOOK_NAMES:
             fn = getattr(module, hook_name, None)
             if callable(fn):

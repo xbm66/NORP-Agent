@@ -241,6 +241,27 @@ def build_system_prompt(project_root: str, enable_web_search: bool,
             "将长文本/外部文档加入检索索引，供后续精确检索。\n"
             "index_stats(): 不确定索引中是否有数据时，先调用它确认可用来源。\n"
         )
+    # ── 视觉/操作外挂工具（动态检测 vision_ 工具后注入）──
+    _vision_tools = [n for n in (plugin_tool_names or []) if n.startswith("vision_")]
+    if _vision_tools:
+        prompt += (
+            "\n[视觉操作工具 — 让 Agent 看见并操作用户指定的窗口]\n"
+            "vision_list_windows(): 枚举可见窗口拿到 hwnd。⚠️ 任何视觉操作前必须先调用它。\n"
+            "vision_look(hwnd, prompt?): 捕获窗口画面并做视觉理解（L0 只读，无需确认）。\n"
+            "  ⚠️ 需要点击某控件时，先用本工具拿到控件的截图坐标 (x, y)，再调用 vision_click。\n"
+            "vision_move(hwnd, x, y) / vision_scroll(hwnd, x, y, clicks): L1 无副作用，静默执行。\n"
+            "vision_click(hwnd, x, y, button?, double?, expect?): 点击（L2 有副作用）。\n"
+            "vision_type(text) / vision_key(key, mods?): 输入文本/按键（L2 有副作用）。\n"
+            "vision_state(): 查询熔断机/让渡/失败计数状态（操作被拒或连续失败后先查它）。\n"
+            "vision_delegate(action, scope?, max_risk?, window_sec?, hwnd?): 让渡确认权。\n"
+            "  ⚠️ 安全规则（硬约束）：\n"
+            "  - L2 操作（vision_click/vision_type/vision_key）必须由用户在审批弹窗中批准，\n"
+            "    工具返回 NEEDS_CONFIRMATION 或 REJECTED 时不得换参数绕过，必须转告用户。\n"
+            "  - vision_delegate 只能由「用户主动要求」时调用，绝不自行让渡。\n"
+            "  - 坐标必须来自 vision_look 对同一窗口的描述，禁止凭空猜坐标。\n"
+            "  - 操作被拒绝或连续失败 3 次后停手，调用 vision_state 查明原因并上报用户。\n"
+            "  - 用户在场优先：检测到用户接管/熔断时立即停止所有视觉操作。\n"
+        )
     # ── 其他插件工具（动态注入，告知模型这些工具可用）──
     if plugin_tool_names:
         # 排除已在专用段落中详细说明的工具
@@ -250,7 +271,9 @@ def build_system_prompt(project_root: str, enable_web_search: bool,
             "surgical_scan", "surgical_replace",
             "search_context", "index_context", "index_stats",
         }
-        _other_tools = [n for n in plugin_tool_names if n not in _already_documented]
+        _other_tools = [n for n in plugin_tool_names
+                        if n not in _already_documented
+                        and not n.startswith("vision_")]
         if _other_tools:
             prompt += (
                 "\n[插件扩展工具 — 以下工具由插件系统提供，按需调用]\n"

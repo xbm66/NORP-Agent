@@ -73,11 +73,6 @@ async function openSettings() {
     document.getElementById('cfg-jailbreak-guard-action').value = config.jailbreak_guard_action || 'block';
     updateJailbreakGuardStatus();
 
-    // 移动端远程控制
-    document.getElementById('cfg-remote-enabled').checked = config.remote_enabled === true;
-    document.getElementById('cfg-remote-host').value = config.remote_host || '127.0.0.1';
-    document.getElementById('cfg-remote-port').value = config.remote_port || 8090;
-
     // Custom system prompt
     document.getElementById('cfg-custom-prompt-enabled').checked = config.custom_system_prompt_enabled || false;
     document.getElementById('cfg-custom-prompt-source').value = config.custom_system_prompt_file ? 'file' : 'text';
@@ -244,9 +239,6 @@ async function saveSettings() {
         jailbreak_guard_action: document.getElementById('cfg-jailbreak-guard-action').value,
         vision_enabled: document.getElementById('cfg-vision-enabled').checked,
         vision_service_url: document.getElementById('cfg-vision-service-url').value.trim(),
-        remote_enabled: document.getElementById('cfg-remote-enabled').checked,
-        remote_host: document.getElementById('cfg-remote-host').value.trim() || '127.0.0.1',
-        remote_port: parseInt(document.getElementById('cfg-remote-port').value) || 8090,
     };
 
     try {

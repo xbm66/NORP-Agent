@@ -41,8 +41,6 @@ core_js   = read_src("core.js")
 ui_js     = read_src("ui.js")
 wizard_js = read_src("wizard.js")
 main_js   = read_src("main.js")
-ssh_js    = read_src("ssh.js")
-remote_js = read_src("remote.js")
 
 # ── Assemble ──
 # 1. Inline CSS into the <style> tag (replacing <link rel="stylesheet" href="styles.css">)
@@ -86,16 +84,6 @@ scripts_block = f"""<script>
 //  MAIN — Entry point & initialization
 // ═══════════════════════════════════════════════════════════════
 {main_js}
-
-// ═══════════════════════════════════════════════════════════════
-//  SSH — Remote ops panel
-// ═══════════════════════════════════════════════════════════════
-{ssh_js}
-
-// ═══════════════════════════════════════════════════════════════
-//  Remote — Mobile remote control
-// ═══════════════════════════════════════════════════════════════
-{remote_js}
 </script>"""
 
 if '<!-- SCRIPTS injected by build tool -->' in index_html:

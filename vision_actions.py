@@ -209,6 +209,25 @@ def client_to_screen(hwnd: int, client_x: int, client_y: int) -> Tuple[int, int]
     return int(pt.x), int(pt.y)
 
 
+def unscale_coordinates(
+    img_x: float,
+    img_y: float,
+    img_width: int,
+    img_height: int,
+    phys_width: int,
+    phys_height: int,
+) -> Tuple[float, float]:
+    """坐标链第①步「反缩放」的纯函数：图片坐标 → 客户区物理像素坐标。
+
+    无 Win32 调用、零副作用，标定台可离线标定换算公式。
+    """
+    if img_width <= 0 or img_height <= 0 or phys_width <= 0 or phys_height <= 0:
+        raise VisionActionError("坐标换算参数非法（尺寸必须 > 0）")
+    phys_x = float(img_x) * (float(phys_width) / float(img_width))
+    phys_y = float(img_y) * (float(phys_height) / float(img_height))
+    return phys_x, phys_y
+
+
 def image_to_screen(
     hwnd: int,
     img_x: float,
@@ -226,12 +245,9 @@ def image_to_screen(
       phys_width/phys_height 窗口物理像素尺寸（= capture 帧 ContentSize）
     若图片 1:1（未缩放），img_* == phys_*，反缩放恒等。
     """
-    if img_width <= 0 or img_height <= 0 or phys_width <= 0 or phys_height <= 0:
-        raise VisionActionError("坐标换算参数非法（尺寸必须 > 0）")
-
     # ① 反缩放：图片坐标 → 客户区物理像素坐标
-    phys_x = float(img_x) * (float(phys_width) / float(img_width))
-    phys_y = float(img_y) * (float(phys_height) / float(img_height))
+    phys_x, phys_y = unscale_coordinates(
+        img_x, img_y, img_width, img_height, phys_width, phys_height)
 
     # ② ClientToScreen：客户区物理像素 → 屏幕物理像素
     return client_to_screen(hwnd, int(round(phys_x)), int(round(phys_y)))

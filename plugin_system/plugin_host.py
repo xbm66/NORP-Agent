@@ -216,6 +216,26 @@ class PluginHostProcess:
 
         has_execute = callable(getattr(module, "execute", None))
 
+        # ── 工具审批提示（APPROVAL_HINTS）──
+        # 插件可声明「工具 → 审批级别」映射，主进程审批层据此精细控制：
+        #   {"tool_name": "none"}   该工具调用无需人工审批（如只读工具）
+        #   {"tool_name": "plugin"} 走插件审批总开关（默认行为）
+        #   {"tool_name": {"approval": "...", "risk": "L2"}}
+        #                           带风险级声明（供 delegate 让渡免审判断）
+        approval_hints = {}
+        raw_hints = getattr(module, "APPROVAL_HINTS", None)
+        if isinstance(raw_hints, dict):
+            for tname, hint in raw_hints.items():
+                if not isinstance(tname, str):
+                    continue
+                if isinstance(hint, str):
+                    approval_hints[tname] = {"approval": hint}
+                elif isinstance(hint, dict):
+                    approval_hints[tname] = {
+                        "approval": str(hint.get("approval", "plugin")),
+                        "risk": str(hint.get("risk", "")),
+                    }
+
         # 预先创建 context（storage 在子进程内持久）；文件名 key 与 header 名 key 共享同一对象
         ctx = self._make_context(plugin_name, req)
         self._contexts.setdefault(plugin_name, ctx)
@@ -230,6 +250,7 @@ class PluginHostProcess:
             "publisher": (publisher if isinstance(publisher, str) else ""),
             "version": (version if isinstance(version, str) else ""),
             "description": (description if isinstance(description, str) else ""),
+            "approval_hints": _safe_json(approval_hints),
         }
 
     def _make_context(self, plugin_name: str, req: dict) -> PluginContext:

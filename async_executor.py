@@ -2,7 +2,7 @@
 # 集成：沙箱池、文件IO队列、路径映射、权限级联、生命周期、资源隔离
 # Copyright (c) 2026 xingluosama
 
-import asyncio
+import nasync_io
 import json
 import os
 import platform
@@ -177,11 +177,11 @@ class AsyncToolExecutor:
             return f"Error: unknown tool '{tool_name}'"
 
         try:
-            result = await asyncio.wait_for(
+            result = await nasync_io.wait_for(
                 handler(args),
                 timeout=self.BUILTIN_TOOL_TIMEOUT,
             )
-        except asyncio.TimeoutError:
+        except nasync_io.TimeoutError:
             result = (
                 f"Error: built-in tool '{tool_name}' timed out "
                 f"after {self.BUILTIN_TOOL_TIMEOUT:.0f}s"
@@ -316,7 +316,7 @@ class AsyncToolExecutor:
         # 文件 I/O 队列：获取读权限
         await self.file_io_queue.acquire(self.task_id, path, FileOp.READ)
         try:
-            loop = asyncio.get_running_loop()
+            loop = nasync_io.get_running_loop()
             return await loop.run_in_executor(
                 None,
                 self._read_file_sync,
@@ -465,7 +465,7 @@ class AsyncToolExecutor:
         await self.file_io_queue.acquire(self.task_id, source, FileOp.READ)
         await self.file_io_queue.acquire(self.task_id, dest, FileOp.WRITE)
         try:
-            loop = asyncio.get_running_loop()
+            loop = nasync_io.get_running_loop()
             await loop.run_in_executor(
                 None,
                 self._copy_file_sync,
@@ -509,7 +509,7 @@ class AsyncToolExecutor:
         await self.file_io_queue.acquire(self.task_id, source, FileOp.READ)
         await self.file_io_queue.acquire(self.task_id, dest, FileOp.WRITE)
         try:
-            loop = asyncio.get_running_loop()
+            loop = nasync_io.get_running_loop()
             await loop.run_in_executor(
                 None,
                 self._move_file_sync,
@@ -530,7 +530,7 @@ class AsyncToolExecutor:
     async def _list_dir(self, args: dict) -> str:
         """异步列出目录 — 实际 I/O 在线程池中执行，不阻塞事件循环。"""
         path = self._safe_path(args.get("path", "."))
-        loop = asyncio.get_running_loop()
+        loop = nasync_io.get_running_loop()
         return await loop.run_in_executor(None, self._list_dir_sync, path)
 
     @staticmethod
@@ -550,14 +550,14 @@ class AsyncToolExecutor:
 
         ★ 关键修复：之前此方法虽标记为 async def，但内部零 await，
         os.walk() 遍历大目录（如 ComfyUI 数万文件）时直接阻塞事件循环，
-        导致 asyncio.wait_for 无法取消、整个 UI 挂起。
+        导致 nasync_io.wait_for 无法取消、整个 UI 挂起。
         现在将阻塞 I/O 剥离到 run_in_executor 线程池中。
         """
         pattern = args["pattern"]
         root = self._safe_path(args.get("path", "."))
         project_root = self.project_root
 
-        loop = asyncio.get_running_loop()
+        loop = nasync_io.get_running_loop()
         return await loop.run_in_executor(
             None,
             self._search_in_files_sync,
@@ -653,11 +653,11 @@ class AsyncToolExecutor:
             creationflags |= 0x08000000
 
         try:
-            proc = await asyncio.create_subprocess_shell(
+            proc = await nasync_io.create_subprocess_shell(
                 cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stdin=nasync_io.subprocess.DEVNULL,
+                stdout=nasync_io.subprocess.PIPE,
+                stderr=nasync_io.subprocess.PIPE,
                 cwd=self.project_root,
                 creationflags=creationflags if platform.system() == "Windows" else 0,
                 start_new_session=True,
@@ -666,7 +666,7 @@ class AsyncToolExecutor:
             # 注册到生命周期管理器
             self.lifecycle_manager.register_process(self.task_id, proc.pid)
 
-            stdout, stderr = await asyncio.wait_for(
+            stdout, stderr = await nasync_io.wait_for(
                 proc.communicate(), timeout=timeout
             )
             output = (robust_decode(stdout) if stdout else "") + \
@@ -675,7 +675,7 @@ class AsyncToolExecutor:
                 output = f"Command exited with code {proc.returncode}"
             return output.strip()
 
-        except asyncio.TimeoutError:
+        except nasync_io.TimeoutError:
             # 超时：生命周期管理器会杀进程组
             self.lifecycle_manager.stop_task(self.task_id, reason="cmd_timeout")
             return f"Command timed out after {timeout}s and process group was terminated"
@@ -727,7 +727,7 @@ class AsyncToolExecutor:
             else:
                 subprocess.Popen(["xdg-open", path])
 
-        await asyncio.get_running_loop().run_in_executor(None, _open)
+        await nasync_io.get_running_loop().run_in_executor(None, _open)
         return f"File opened: {path}"
 
     async def _read_clipboard(self, args: dict) -> str:
@@ -780,7 +780,7 @@ class AsyncToolExecutor:
                 return "Error: No clipboard tool found. Install xclip (X11) or wl-clipboard (Wayland)."
 
         try:
-            text = await asyncio.get_running_loop().run_in_executor(None, _read)
+            text = await nasync_io.get_running_loop().run_in_executor(None, _read)
             if not text:
                 return "(clipboard is empty)"
             return text
@@ -824,7 +824,7 @@ class AsyncToolExecutor:
                 )
 
         try:
-            await asyncio.get_running_loop().run_in_executor(None, _write)
+            await nasync_io.get_running_loop().run_in_executor(None, _write)
             preview = text[:80] + "..." if len(text) > 80 else text
             return f"Text copied to clipboard ({len(text)} chars): {preview}"
         except Exception as e:
@@ -841,7 +841,7 @@ class AsyncToolExecutor:
             from archive_utils import unpack_archive
             return unpack_archive(path, dest_dir)
 
-        return await asyncio.get_running_loop().run_in_executor(None, _do_unpack)
+        return await nasync_io.get_running_loop().run_in_executor(None, _do_unpack)
 
     async def _web_search(self, args: dict) -> str:
         query = args.get("query", "")
@@ -876,7 +876,7 @@ class AsyncToolExecutor:
             except Exception as e:
                 return f"Web search failed: {str(e)}"
 
-        return await asyncio.get_running_loop().run_in_executor(None, _search)
+        return await nasync_io.get_running_loop().run_in_executor(None, _search)
 
     async def _init_project(self, args: dict) -> str:
         ptype = args["type"]
@@ -907,7 +907,7 @@ class AsyncToolExecutor:
                     f.write(f"# {name}\n")
             return f"Project '{name}' (type: {ptype}) created at {proj_path}"
 
-        return await asyncio.get_running_loop().run_in_executor(None, _init)
+        return await nasync_io.get_running_loop().run_in_executor(None, _init)
 
     async def _install_dependency(self, args: dict) -> str:
         package = args["package"]
@@ -923,22 +923,22 @@ class AsyncToolExecutor:
 
         # 直接在本地异步执行，绕过 _exec_cmd 的 shell 封装
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await nasync_io.create_subprocess_exec(
                 *cmd_list,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stdin=nasync_io.subprocess.DEVNULL,
+                stdout=nasync_io.subprocess.PIPE,
+                stderr=nasync_io.subprocess.PIPE,
                 cwd=self.project_root,
             )
             self.lifecycle_manager.register_process(self.task_id, proc.pid)
 
-            stdout, stderr = await asyncio.wait_for(
+            stdout, stderr = await nasync_io.wait_for(
                 proc.communicate(), timeout=120
             )
             output = (robust_decode(stdout) if stdout else "") + \
                      (robust_decode(stderr) if stderr else "")
             return output.strip() or f"Exit code: {proc.returncode}"
-        except asyncio.TimeoutError:
+        except nasync_io.TimeoutError:
             self.lifecycle_manager.stop_task(self.task_id, reason="install_timeout")
             return f"Package install timed out after 120s"
         except Exception as e:
@@ -948,19 +948,19 @@ class AsyncToolExecutor:
         message = args["message"]
 
         async def _commit():
-            proc1 = await asyncio.create_subprocess_exec(
+            proc1 = await nasync_io.create_subprocess_exec(
                 "git", "add", "-A",
                 cwd=self.project_root,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stdout=nasync_io.subprocess.PIPE,
+                stderr=nasync_io.subprocess.PIPE,
             )
             await proc1.communicate()
 
-            proc2 = await asyncio.create_subprocess_exec(
+            proc2 = await nasync_io.create_subprocess_exec(
                 "git", "commit", "-m", message,
                 cwd=self.project_root,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stdout=nasync_io.subprocess.PIPE,
+                stderr=nasync_io.subprocess.PIPE,
             )
             stdout, stderr = await proc2.communicate()
             output = (robust_decode(stdout) if stdout else "") + \
@@ -996,7 +996,7 @@ class AsyncToolExecutor:
                 json.dump(history, f, indent=2, ensure_ascii=False)
             return f"Task recorded: {summary}"
 
-        return await asyncio.get_running_loop().run_in_executor(None, _record)
+        return await nasync_io.get_running_loop().run_in_executor(None, _record)
 
     # ── 日志 ──
 
@@ -1047,7 +1047,7 @@ class AsyncToolExecutor:
         return get_context_index(app_dir=app_dir, project_root=self.project_root)
 
     async def _index_workspace(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, self._index_workspace_sync, args)
 
     def _index_workspace_sync(self, args: dict) -> str:
@@ -1076,7 +1076,7 @@ class AsyncToolExecutor:
                 f"💡 现在可用 `search_files(query='...')` 精确检索。")
 
     async def _search_files_native(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, self._search_files_sync, args)
 
     def _search_files_sync(self, args: dict) -> str:
@@ -1128,7 +1128,7 @@ class AsyncToolExecutor:
         return "\n".join(lines)
 
     async def _find_files_native(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, self._find_files_sync, args)
 
     def _find_files_sync(self, args: dict) -> str:
@@ -1156,7 +1156,7 @@ class AsyncToolExecutor:
         return "\n".join(lines)
 
     async def _search_large_file(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, self._search_large_file_sync, args)
 
     def _search_large_file_sync(self, args: dict) -> str:
@@ -1188,7 +1188,7 @@ class AsyncToolExecutor:
         return "\n".join(lines)
 
     async def _workspace_index_status(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, self._workspace_index_status_sync)
 
     def _workspace_index_status_sync(self) -> str:
@@ -1208,7 +1208,7 @@ class AsyncToolExecutor:
         return "\n".join(lines)
 
     async def _clear_workspace_index(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, self._clear_workspace_index_sync, args)
 
     def _clear_workspace_index_sync(self, args: dict) -> str:
@@ -1226,7 +1226,7 @@ class AsyncToolExecutor:
         return f"✅ 已清空全部工作区文件索引。"
 
     async def _surgical_replace(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, self._surgical_replace_sync, args)
 
     def _surgical_replace_sync(self, args: dict) -> str:
@@ -1244,7 +1244,7 @@ class AsyncToolExecutor:
             backup=args.get("backup", False), encoding=args.get("encoding", "utf-8"))
 
     async def _surgical_scan(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, self._surgical_scan_sync, args)
 
     def _surgical_scan_sync(self, args: dict) -> str:
@@ -1261,14 +1261,14 @@ class AsyncToolExecutor:
             encoding=args.get("encoding", "utf-8"))
 
     async def _web_fetch(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, handle_web_fetch,
             args.get("url", "").strip(),
             args.get("max_chars", 8000),
             args.get("timeout", 15))
 
     async def _web_extract_links(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, handle_web_extract_links,
             args.get("url", "").strip(),
             args.get("same_domain_only", False),
@@ -1276,7 +1276,7 @@ class AsyncToolExecutor:
             args.get("timeout", 15))
 
     async def _index_context(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, self._index_context_sync, args)
 
     def _index_context_sync(self, args: dict) -> str:
@@ -1301,7 +1301,7 @@ class AsyncToolExecutor:
         return f"✅ 已索引 **{count}** 个文本块（来源: `{source}`）"
 
     async def _search_context(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, self._search_context_sync, args)
 
     def _search_context_sync(self, args: dict) -> str:
@@ -1329,7 +1329,7 @@ class AsyncToolExecutor:
         return "\n".join(lines)
 
     async def _clear_index(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, self._clear_index_sync, args)
 
     def _clear_index_sync(self, args: dict) -> str:
@@ -1344,7 +1344,7 @@ class AsyncToolExecutor:
             return f"✅ 已清空全部索引（共 {stats_before['total_documents']} 个文档）。"
 
     async def _index_stats(self, args: dict) -> str:
-        return await asyncio.get_running_loop().run_in_executor(
+        return await nasync_io.get_running_loop().run_in_executor(
             None, self._index_stats_sync)
 
     def _index_stats_sync(self) -> str:

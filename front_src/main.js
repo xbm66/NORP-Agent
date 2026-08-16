@@ -115,9 +115,6 @@ window.addEventListener('pywebviewready', async function() {
             dismissLoadingOverlay();
         }, 700);
 
-        // ── 启动空闲同步：其它端（如移动端）发消息时，桌面端自动重绘 ──
-        setInterval(idleSync, 1200);
-
     } catch(e) {
         config = {};
         userInput.disabled = false;

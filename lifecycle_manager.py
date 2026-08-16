@@ -3,7 +3,7 @@
 # 进程组 + 超时联动：任务停止时杀整个进程组，超时自动清理
 # Copyright (c) 2026 xingluosama
 
-import asyncio
+import nasync_io
 import os
 import platform
 import signal
@@ -34,7 +34,7 @@ class ProcessGroup:
     pids: Set[int] = field(default_factory=set)  # 所有进程 PID
     created_at: float = 0.0
     timeout: float = 0  # 超时秒数，0 表示不超时
-    _timer_handle: Optional[asyncio.TimerHandle] = None
+    _timer_handle: Optional[nasync_io.TimerHandle] = None
 
     def add_pid(self, pid: int):
         self.pids.add(pid)
@@ -55,7 +55,7 @@ class TaskLifecycle:
     stopped_at: float = 0.0
     waiting_since: float = 0.0   # 进入 WAITING_USER 状态的时间戳
     timeout_seconds: int = 0
-    _cancel_event: Optional[asyncio.Event] = None
+    _cancel_event: Optional[nasync_io.Event] = None
     _cleanup_callbacks: List[Callable] = field(default_factory=list)
 
     @property
@@ -91,7 +91,7 @@ class LifecycleManager:
         # stop_task() 在锁内检查此集合，防止并发重复杀进程组
         self._killing: Set[str] = set()
         # 僵尸扫描定时器
-        self._zombie_scanner: Optional[asyncio.Task] = None
+        self._zombie_scanner: Optional[nasync_io.Task] = None
         self._running = False
 
     # ── 任务生命周期 ──
@@ -106,7 +106,7 @@ class LifecycleManager:
             state=TaskState.PENDING,
             created_at=time.time(),
             timeout_seconds=timeout,
-            _cancel_event=asyncio.Event(),
+            _cancel_event=nasync_io.Event(),
         )
 
         pg = ProcessGroup(task_id=task_id, timeout=timeout)
@@ -277,7 +277,7 @@ class LifecycleManager:
 
     def _schedule_timeout(self, task: TaskLifecycle):
         """安排超时回调。"""
-        loop = asyncio.get_running_loop()
+        loop = nasync_io.get_running_loop()
         task_id = task.task_id
         timeout = task.timeout_seconds
 
@@ -307,7 +307,7 @@ class LifecycleManager:
 
     # ── 取消事件 ──
 
-    def get_cancel_event(self, task_id: str) -> Optional[asyncio.Event]:
+    def get_cancel_event(self, task_id: str) -> Optional[nasync_io.Event]:
         """获取任务的取消事件，异步协程可 await。"""
         with self._lock:
             if task_id in self._tasks:
@@ -328,7 +328,7 @@ class LifecycleManager:
         """启动僵尸进程扫描器，定期清理已停止但未释放资源的任务。"""
         self._running = True
         while self._running:
-            await asyncio.sleep(interval)
+            await nasync_io.sleep(interval)
             self._scan_zombies()
 
     def stop_zombie_scanner(self):
@@ -353,7 +353,7 @@ class LifecycleManager:
                         self._kill_process_group(task.process_group, force=True)
                     to_remove.append(task_id)
                 # WAITING_USER 任务不在此处理 ——
-                # async_loop._wait_for_user_input 自带 asyncio.wait_for(30min) 硬超时
+                # async_loop._wait_for_user_input 自带 nasync_io.wait_for(30min) 硬超时
 
             for task_id in to_remove:
                 self._tasks.pop(task_id, None)
@@ -405,10 +405,15 @@ class LifecycleManager:
                        if t.state in (TaskState.RUNNING, TaskState.WAITING_USER, TaskState.STOPPING))
 
     def get_stats(self) -> dict:
+        # ★ 修复：不能在持锁状态调用 get_active_count()（其内部也要获取同一把
+        # threading.Lock，不可重入会死锁）。改为锁内直接内联计算。
         with self._lock:
             return {
                 "total_tasks": len(self._tasks),
-                "active": self.get_active_count(),
+                "active": sum(
+                    1 for t in self._tasks.values()
+                    if t.state in (TaskState.RUNNING, TaskState.WAITING_USER,
+                                   TaskState.STOPPING)),
                 "running": sum(1 for t in self._tasks.values() if t.state == TaskState.RUNNING),
                 "waiting_user": sum(1 for t in self._tasks.values() if t.state == TaskState.WAITING_USER),
                 "stopped": sum(1 for t in self._tasks.values() if t.state == TaskState.STOPPED),
