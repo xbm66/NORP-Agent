@@ -610,6 +610,68 @@ class UIAdapter(Protocol):
 
 换渲染器：`np(ui=MyRenderer())` 或 `np(ui="web")`（引用注册表已注册名）。
 
+### 5.7 模块流程画布（FLOW）与 FE 前端模块
+
+`/flow` 是独立前端分类「模块流程」：把 Agent 组装过程画成一张画布
+（模块 = 方块，端口 = 注册钩子，beam 连线 = 执行链路），RUN 时图被
+提交给后端用注册表真实组件拓扑执行。画布自动保存到
+`~/.norpagent/flow_graph.json`，刷新 / 重启自动恢复；顶栏
+「应用到智能体」开启后，front 聊天任务改按该流程执行（行为热切换）。
+详见 `docs/flow.md`。
+
+**FE 前端模块（文件即前端）**：把 `.html / .js / .ts` 文件拖入画布
+即注册为前端模块（模块坞「前端 FE」分组），后端托管到
+`/fe/<name>`（卡片「↗」新标签页打开）。每个 FE 拥有**独立配置
+作用域**（互不干扰，默认值取自「连接设置」全局配置），配置经
+`GET/POST /api/fe/config?fe_id=...` 读写，落盘到
+`~/.norpagent/fe_configs/<fe_id>.json`。
+
+FE 节点有 **1/2/3 三种形态**（卡片标题栏按钮切换）：
+
+| 形态 | 含义 |
+|---|---|
+| 1 | 全局设置节点：配置写入「连接设置」（scope=global） |
+| 2 | FE 即设置集合：独立配置作用域（scope=fe，默认形态） |
+| 3 | 拆散成设置项子卡片：每个配置项一个成员行（可单独拖出 / 就近连线） |
+
+**输入框体系（一切需要输入的地方都是输入框）**：
+
+- FE / 全局设置节点卡片把每个配置项（api_key / api_base / model /
+  project_root / plugin_dirs / temperature / max_tokens / max_steps /
+  task_timeout / system_prompt / language）渲染成一行
+  「IN 端口 · 标签 · 输入框 · OUT 端口」，值直接写在卡片上，
+  改完 500ms 防抖自动保存；形态 3 的每个成员行同样是输入框；
+- model / tool / sandbox / other 等节点卡片底部带**值输入框带**
+  （context / query / code / value 直接编辑）；TR 卡 prompt 输入框、
+  PATH 卡路径输入框保持内嵌；
+- 模型字段一律是**可手输输入框 + datalist 提示**（flow 连接设置弹窗、
+  WebUI 设置弹窗、model 节点实例字段）：远端模型列表拉取失败或
+  模型不在列表里时，直接键入任意模型名即可（留空 = 引擎默认）；
+- 卡片输入框与右侧节点面板双向同步；beam 连线到设置端口时连线动作
+  本身立即生效（写入独立 / 全局配置）。
+
+**画布管理三件套（0.6.8 新增，防画布乱局）**：
+
+- `Alt+左键拖拽` 空白 = **框选**，与框相交的模块全部高亮，`Del`
+  批量删除；
+- `Ctrl+A` = **全选**，`Del` 批量删除；
+- 顶栏 **「清空画布」** = 一键删除全部模块与 beam（确认弹窗
+  防误触），确认后立即自动保存；清空后刷新保持空白（后端保存
+  空图，加载不再回落示例模板）；
+- **误触注入已移除**：双击画布空白注入、单击坞卡片快速注入两个
+  入口彻底删除——此前误触产生的 other 节点会被自动保存固化，导致
+  「一打开画布就冒出一大堆 other」。现在注入只有拖拽一条途径。
+
+**DeepSeek 模型名**：`deepseek-chat` / `deepseek-reasoner` 已于
+2026-07-24 被官方停用，现役为 `deepseek-v4-flash` / `deepseek-v4-pro`。
+后端 `list_models` 缓存与 flow 快照（`filter_remote_models`）以及
+前端提示列表 / 远端模型坞都会过滤停用名（`RETIRED_REMOTE_MODELS` /
+`RETIRED_MODELS` / `RETIRED_REMOTE`），历史缓存不会再把旧名展示出来。
+
+**连接设置弹窗**（flow 顶栏）：立即显示、不被远端模型拉取阻塞；
+「拉取模型列表」用表单当前 Key/Base 即时请求（无需先保存）；点击
+弹窗外部不关闭（Esc / × / 取消关闭）；输入框失焦自动保存应用。
+
 ---
 
 ## 第 6 章　np() 启动与生命周期
@@ -1172,6 +1234,23 @@ np(model="openai_compat", model_name="deepseek-v4-flash",
 
 **Q7：`np(async_loop=...)` 和 `np.nasyncio(...)` 有什么区别？**
 没有区别，同一条路径；前者是槽位写法，后者是架构函数写法。
+
+**Q8：`/flow` 画布、FE 前端模块、输入框体系是什么？**
+`/flow` 是独立前端分类「模块流程」：画布图自动保存并可用
+「应用到智能体」热切换 front 聊天行为。FE = 拖入 `.html/.js/.ts`
+文件注册的前端模块（托管 `/fe/<name>`，独立配置作用域）。输入框
+体系 = 一切需要输入的地方都是输入框：FE / 全局设置节点卡片上每个
+配置项一行输入框、model/tool/sandbox 等节点卡片底部带值输入框带、
+所有模型字段均为可手输输入框 + datalist 提示（拉取失败也能手输）。
+详见第 5.7 节与 `docs/flow.md`。
+
+**Q9：画布怎么批量清理？deepseek-chat 还能用吗？**
+画布：`Alt+拖拽` 框选 / `Ctrl+A` 全选后 `Del` 批量删除，顶栏
+「清空画布」一键清空（确认后立即保存，刷新保持空白）；双击空白
+注入与单击坞卡片快速注入已移除（防误触铺节点）。deepseek-chat /
+deepseek-reasoner 已于 2026-07-24 被 DeepSeek 官方停用，现役为
+deepseek-v4-flash / deepseek-v4-pro；旧名在提示列表、远端模型坞
+与后端缓存中自动过滤（`RETIRED_REMOTE_MODELS`）。
 
 ---
 
